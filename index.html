@@ -141,16 +141,16 @@
         <input type="number" id="client_id" placeholder="Введите ID абонента" oninput="validateForm()">
     </div>
 
-    <!-- Сдал полных -->
+    <!-- Сдал полных 19л -->
     <div class="form-group">
-        <label for="delivered" id="lbl-delivered">🍾 Сдал полных бутылей:</label>
-        <input type="number" id="delivered" value="1" min="1" oninput="calculateTotal()">
+        <label for="delivered" id="lbl-delivered">💧 Сдал полных (19л):</label>
+        <input type="number" id="delivered" placeholder="Укажите кол-во" min="0" oninput="calculateTotal()">
     </div>
 
-    <!-- Принял пустых -->
+    <!-- Принял пустых 19л -->
     <div class="form-group">
-        <label for="returned" id="lbl-returned">🧴 Принял пустых бутылей:</label>
-        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" oninput="validateForm()">
+        <label for="returned" id="lbl-returned">🔄 Принял пустых (19л):</label>
+        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" min="0" oninput="validateForm()">
     </div>
 
     <!-- Тип клиента -->
@@ -178,7 +178,7 @@
 
     <!-- Расчет суммы -->
     <div class="price-card">
-        <span id="lbl-total">К оплате:</span> <span id="total-price">23 000</span> сум
+        <span id="lbl-total">К оплате:</span> <span id="total-price">0</span> сум
     </div>
 
     <button class="submit-btn" id="send-btn" disabled onclick="sendReport()">Отправить отчет</button>
@@ -193,11 +193,12 @@
 
     const translations = {
         ru: {
-            title: "📦 Отчет о доставке",
+            title: "📦 Отчет о доставке (19л)",
             clientId: "🆔 ID абонента:",
             clientPlaceholder: "Введите ID абонента",
-            delivered: "🍾 Сдал полных бутылей:",
-            returned: "🧴 Принял пустых бутылей:",
+            delivered: "💧 Сдал полных (19л):",
+            deliveredPlaceholder: "Укажите кол-во",
+            returned: "🔄 Принял пустых (19л):",
             returnedPlaceholder: "Укажите кол-во (даже 0)",
             clientType: "👤 Тип клиента:",
             fiz: "Физ. лицо",
@@ -209,11 +210,12 @@
             btn: "Отправить отчет"
         },
         uz: {
-            title: "📦 Yetkazib berish hisoboti",
+            title: "📦 Yetkazib berish hisoboti (19l)",
             clientId: "🆔 Abonent ID:",
             clientPlaceholder: "Abonent ID raqamini kiriting",
-            delivered: "🍾 To'liq idishlar berildi:",
-            returned: "🧴 Bo'sh idishlar olindi:",
+            delivered: "💧 To'liq berildi (19l):",
+            deliveredPlaceholder: "Miqdorini kiriting",
+            returned: "🔄 Bo'sh olindi (19l):",
             returnedPlaceholder: "Miqdorini kiriting (0 ham)",
             clientType: "👤 Mijoz turi:",
             fiz: "Jismoniy",
@@ -236,6 +238,7 @@
         document.getElementById('lbl-client-id').innerText = t.clientId;
         document.getElementById('client_id').placeholder = t.clientPlaceholder;
         document.getElementById('lbl-delivered').innerText = t.delivered;
+        document.getElementById('delivered').placeholder = t.deliveredPlaceholder;
         document.getElementById('lbl-returned').innerText = t.returned;
         document.getElementById('returned').placeholder = t.returnedPlaceholder;
         document.getElementById('lbl-client-type').innerText = t.clientType;
@@ -271,14 +274,15 @@
     function sendReport() {
         const clientType = document.querySelector('input[name="client_type"]:checked').value;
         const paymentType = document.getElementById('payment_type').value;
+        const deliveredCount = parseInt(document.getElementById('delivered').value) || 0;
 
         const data = {
             client_id: document.getElementById('client_id').value,
-            delivered: document.getElementById('delivered').value,
+            delivered: deliveredCount,
             returned: document.getElementById('returned').value,
             client_type: clientType,
             payment_type: paymentType,
-            total_price: parseInt(document.getElementById('delivered').value) * PRICE_PER_BOTTLE,
+            total_price: deliveredCount * PRICE_PER_BOTTLE,
             language: currentLang
         };
 

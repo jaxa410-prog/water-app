@@ -22,14 +22,8 @@
             border-radius: 14px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
-        .header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
         h2 {
-            margin: 0;
+            margin: 0 0 20px 0;
             font-size: 20px;
         }
         .form-group {
@@ -74,7 +68,7 @@
 
         <div class="form-group">
             <label for="deliveredCount">Сдал полных (19л):</label>
-            <input type="number" id="deliveredCount" value="0" min="0">
+            <input type="number" id="deliveredCount" value="0" min="0" oninput="calculateTotal()">
         </div>
 
         <div class="form-group">
@@ -111,6 +105,14 @@
         let tg = window.Telegram.WebApp;
         tg.expand();
 
+        // Автоподсчет суммы по 23 000 сум за 1 бутыль
+        function calculateTotal() {
+            const delivered = parseInt(document.getElementById('deliveredCount').value) || 0;
+            const pricePerBottle = 23000;
+            const totalPrice = delivered * pricePerBottle;
+            document.getElementById('totalPrice').value = totalPrice;
+        }
+
         function sendReport() {
             const data = {
                 client_id: document.getElementById('clientId').value,
@@ -126,7 +128,6 @@
                 return;
             }
 
-            // Отправляем данные напрямую на наш сервер через fetch
             fetch('/api/report', {
                 method: 'POST',
                 headers: {

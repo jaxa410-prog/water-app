@@ -286,8 +286,17 @@
             language: currentLang
         };
 
-        tg.sendData(JSON.stringify(data));
-        tg.close();
+        try {
+            // Проверяем, запущено ли приложение в Telegram
+            if (window.Telegram && window.Telegram.WebApp) {
+                tg.sendData(JSON.stringify(data));
+                tg.close();
+            } else {
+                alert("Ошибка: приложение запущено вне Telegram!");
+            }
+        } catch (error) {
+            alert("Ошибка отправки: " + error.message);
+        }
     }
 </script>
 

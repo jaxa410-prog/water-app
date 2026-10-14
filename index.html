@@ -117,6 +117,11 @@
             cursor: pointer;
             transition: background-color 0.2s, opacity 0.2s;
         }
+        button.submit-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
     </style>
 </head>
 <body>
@@ -133,7 +138,7 @@
     <!-- ID Абонента -->
     <div class="form-group">
         <label for="client_id" id="lbl-client-id">🆔 ID абонента:</label>
-        <input type="number" id="client_id" placeholder="Введите ID абонента">
+        <input type="number" id="client_id" placeholder="Введите ID абонента" oninput="validateForm()">
     </div>
 
     <!-- Сдал полных 19л -->
@@ -145,7 +150,7 @@
     <!-- Принял пустых 19л -->
     <div class="form-group">
         <label for="returned" id="lbl-returned">🔄 Принял пустых (19л):</label>
-        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" min="0">
+        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" min="0" oninput="validateForm()">
     </div>
 
     <!-- Тип клиента -->
@@ -156,7 +161,7 @@
                 <input type="radio" name="client_type" value="Физ. лицо" checked> <span id="opt-fiz">Физ. лицо</span>
             </label>
             <label class="radio-option">
-                <input type="radio" name="client_type" value="Юр. лицо"> <span id="opt-yur">Юр. лицо</span>
+                <input type="radio" name="client_type" value="Юр. лицо"> <span id="opt-ur">Юр. лицо</span>
             </label>
         </div>
     </div>
@@ -165,129 +170,78 @@
     <div class="form-group">
         <label for="payment_type" id="lbl-payment">💳 Тип оплаты:</label>
         <select id="payment_type">
-            <option value="Наличный" id="pay-cash">Наличный</option>
-            <option value="Click">Click</option>
-            <option value="Перечисление" id="pay-bank">Перечисление</option>
+            <option value="Наличные">Наличные</option>
+            <option value="Перевод (Click/Payme)">Перевод (Click/Payme)</option>
+            <option value="Терминал">Терминал</option>
+            <option value="Долг">Долг</option>
         </select>
     </div>
 
-    <!-- Расчет суммы -->
-    <div class="price-card">
-        <span id="lbl-total">К оплате:</span> <span id="total-price">0</span> сум
+    <!-- Итоговая сумма -->
+    <div class="price-card" id="price-card">
+        💰 Сумма: 0 сум
     </div>
 
-    <button class="submit-btn" id="send-btn" onclick="sendReport()">Отправить отчет</button>
+    <!-- Кнопка отправки -->
+    <button class="submit-btn" id="submit-btn" onclick="submitReport()" disabled>Отправить отчет</button>
 </div>
 
 <script>
-    const tg = window.Telegram.WebApp;
-    tg.expand();
+    let tg = window.Telegram.WebApp;
+    tg.expand(); // Разворачиваем Mini App на весь экран
 
-    const PRICE_PER_BOTTLE = 23000;
-    let currentLang = 'ru';
-
-    const translations = {
-        ru: {
-            title: "📦 Отчет о доставке (19л)",
-            clientId: "🆔 ID абонента:",
-            clientPlaceholder: "Введите ID абонента",
-            delivered: "💧 Сдал полных (19л):",
-            deliveredPlaceholder: "Укажите кол-во",
-            returned: "🔄 Принял пустых (19л):",
-            returnedPlaceholder: "Укажите кол-во (даже 0)",
-            clientType: "👤 Тип клиента:",
-            fiz: "Физ. лицо",
-            yur: "Юр. лицо",
-            payment: "💳 Тип оплаты:",
-            payCash: "Наличный",
-            payBank: "Перечисление",
-            total: "К оплате:",
-            btn: "Отправить отчет"
-        },
-        uz: {
-            title: "📦 Yetkazib berish hisoboti (19l)",
-            clientId: "🆔 Abonent ID:",
-            clientPlaceholder: "Abonent ID raqamini kiriting",
-            delivered: "💧 To'liq berildi (19l):",
-            deliveredPlaceholder: "Miqdorini kiriting",
-            returned: "🔄 Bo'sh olindi (19l):",
-            returnedPlaceholder: "Miqdorini kiriting (0 ham)",
-            clientType: "👤 Mijoz turi:",
-            fiz: "Jismoniy",
-            yur: "Yuridik",
-            payment: "💳 To'lov turi:",
-            payCash: "Naqd pul",
-            payBank: "Ko'chirma (Pul o'tkazish)",
-            total: "To'lash uchun:",
-            btn: "Hisobotni yuborish"
-        }
-    };
-
-    function setLanguage(lang) {
-        currentLang = lang;
-        document.getElementById('btn-ru').classList.toggle('active', lang === 'ru');
-        document.getElementById('btn-uz').classList.toggle('active', lang === 'uz');
-
-        const t = translations[lang];
-        document.getElementById('ui-title').innerText = t.title;
-        document.getElementById('lbl-client-id').innerText = t.clientId;
-        document.getElementById('client_id').placeholder = t.clientPlaceholder;
-        document.getElementById('lbl-delivered').innerText = t.delivered;
-        document.getElementById('delivered').placeholder = t.deliveredPlaceholder;
-        document.getElementById('lbl-returned').innerText = t.returned;
-        document.getElementById('returned').placeholder = t.returnedPlaceholder;
-        document.getElementById('lbl-client-type').innerText = t.clientType;
-        document.getElementById('opt-fiz').innerText = t.fiz;
-        document.getElementById('opt-yur').innerText = t.yur;
-        document.getElementById('lbl-payment').innerText = t.payment;
-        document.getElementById('pay-cash').innerText = t.payCash;
-        document.getElementById('pay-bank').innerText = t.payBank;
-        document.getElementById('lbl-total').innerText = t.total;
-        document.getElementById('send-btn').innerText = t.btn;
-    }
+    const PRICE_PER_BOTTLE = 25000; // Пример цены за 1 бут (можете изменить под себя)
 
     function calculateTotal() {
-        const count = parseInt(document.getElementById('delivered').value) || 0;
-        const total = count * PRICE_PER_BOTTLE;
-        document.getElementById('total-price').innerText = total.toLocaleString('ru-RU');
+        let delivered = parseInt(document.getElementById('delivered').value) || 0;
+        let total = delivered * PRICE_PER_BOTTLE;
+        
+        document.getElementById('price-card').innerText = `💰 Сумма: ${total.toLocaleString('ru-RU')} сум`;
+        window.currentTotal = total;
+        validateForm();
     }
 
-    function sendReport() {
-        const clientId = document.getElementById('client_id').value.trim();
-        const delivered = document.getElementById('delivered').value.trim();
-        const returned = document.getElementById('returned').value.trim();
+    function validateForm() {
+        let clientId = document.getElementById('client_id').value.trim();
+        let delivered = document.getElementById('delivered').value.trim();
+        let returned = document.getElementById('returned').value.trim();
+        let btn = document.getElementById('submit-btn');
 
-        if (!clientId || !delivered || returned === "") {
-            alert("Заполните все поля перед отправкой!");
-            return;
+        // Кнопка активна, только если заполнены ID, сданные и принятые бутыли
+        if (clientId !== "" && delivered !== "" && returned !== "") {
+            btn.removeAttribute('disabled');
+        } else {
+            btn.setAttribute('disabled', 'true');
         }
+    }
 
-        const clientType = document.querySelector('input[name="client_type"]:checked').value;
-        const paymentType = document.getElementById('payment_type').value;
-        const deliveredCount = parseInt(delivered) || 0;
+    function submitReport() {
+        let clientId = document.getElementById('client_id').value;
+        let delivered = document.getElementById('delivered').value;
+        let returned = document.getElementById('returned').value;
+        let clientType = document.querySelector('input[name="client_type"]:checked').value;
+        let paymentType = document.getElementById('payment_type').value;
+        let totalPrice = window.currentTotal || 0;
 
-        const data = {
+        let data = {
             client_id: clientId,
-            delivered: deliveredCount,
-            returned: parseInt(returned) || 0,
+            delivered: delivered,
+            returned: returned,
             client_type: clientType,
             payment_type: paymentType,
-            total_price: deliveredCount * PRICE_PER_BOTTLE,
-            language: currentLang
+            total_price: totalPrice
         };
 
-        alert("Отправляем: ID=" + clientId + ", Сдал=" + delivered);
+        // САМОЕ ВАЖНОЕ: Передаем данные боту и закрываем приложение
+        tg.sendData(JSON.stringify(data));
+        tg.close();
+    }
 
-        try {
-            if (window.Telegram && window.Telegram.WebApp) {
-                tg.sendData(JSON.stringify(data));
-                tg.close();
-            } else {
-                alert("Ошибка: вне Telegram");
-            }
-        } catch (error) {
-            alert("Ошибка SDK: " + error.message);
-        }
+    // Переключение языков (опционально)
+    function setLanguage(lang) {
+        document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(`btn-${lang}`).classList.add('active');
+        // Здесь можно добавить тексты для узбекского языка, если потребуется
     }
 </script>
 

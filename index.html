@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Учет доставки воды</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--tg-theme-bg-color, #ffffff);
+      color: var(--tg-theme-text-color, #000000);
+      margin: 0;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    .lang-switcher {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .lang-btn {
+      padding: 4px 10px;
+      font-size: 12px;
+      border: 1px solid #2481cc;
+      background: transparent;
+      color: var(--tg-theme-text-color, #000000);
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .lang-btn.active {
+      background-color: var(--tg-theme-button-color, #2481cc);
+      color: var(--tg-theme-button-text-color, #ffffff);
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      box-sizing: border-box;
+      font-size: 16px;
+      background-color: var(--tg-theme-secondary-bg-color, #f4f4f5);
+      color: var(--tg-theme-text-color, #000000);
+    }
+    .radio-group {
+      display: flex;
+      gap: 12px;
+    }
+    .radio-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: normal;
+      cursor: pointer;
+    }
+    .radio-label input {
+      width: auto;
+    }
+    .total-box {
+      background-color: var(--tg-theme-secondary-bg-color, #f4f4f5);
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      border: 1px solid #2481cc;
+    }
+    .total-amount {
+      font-size: 20px;
+      font-weight: bold;
+      color: var(--tg-theme-button-color, #2481cc);
+      margin-top: 4px;
+    }
+    button[type="submit"] {
+      width: 100%;
+      padding: 12px;
+      background-color: var(--tg-theme-button-color, #2481cc);
+      color: var(--tg-theme-button-text-color, #ffffff);
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    button[type="submit"]:disabled {
+      background-color: #a0a0a0;
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Переключатель языка -->
+  <div class="lang-switcher">
+    <button type="button" class="lang-btn active" id="btnRu" onclick="setLanguage('ru')">РУС</button>
+    <button type="button" class="lang-btn" id="btnUz" onclick="setLanguage('uz')">UZB</button>
+  </div>
+
+  <h2 id="formTitle">Отчет курьера</h2>
+
+  <form id="deliveryForm">
+    <!-- ФИО курьера -->
+    <div class="form-group">
+      <label id="labelCourier" for="courierName">Курьер (Имя Фамилия):</label>
+      <input type="text" id="courierName" placeholder="Загружается..." required>
+    </div>
+
+    <!-- ID абонента -->
+    <div class="form-group">
+      <label id="labelClientId" for="clientId">ID абонента / клиента:</label>
+      <input type="text" id="clientId" placeholder="Например: 12345 или AB-01" required>
+    </div>
+
+    <!-- Тип клиента -->
+    <div class="form-group">
+      <label id="labelClientType">Тип клиента:</label>
+      <div class="radio-group">
+        <label class="radio-label">
+          <input type="radio" name="clientType" value="Физлицо" checked> 
+          <span id="textIndividual">Физлицо</span>
+        </label>
+        <label class="radio-label">
+          <input type="radio" name="clientType" value="Юрлицо"> 
+          <span id="textLegal">Юрлицо</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Отдал -->
+    <div class="form-group">
+      <label id="labelFull" for="fullBottles">Отдал полных бутылей (шт):</label>
+      <input type="number" id="fullBottles" min="0" value="0" required>
+    </div>
+
+    <!-- Сумма к оплате -->
+    <div class="total-box">
+      <span id="labelTotal" style="font-weight: 600; font-size: 14px;">Сумма к оплате:</span>
+      <div id="totalAmount" class="total-amount">0 сум</div>
+    </div>
+
+    <!-- Забрал (без нуля по умолчанию, поле пустое) -->
+    <div class="form-group">
+      <label id="labelEmpty" for="emptyBottles">Забрал пустых бутылей (шт): *</label>
+      <input type="number" id="emptyBottles" min="0" placeholder="Например: 0" required>
+    </div>
+
+    <!-- Способ оплаты -->
+    <div class="form-group">
+      <label id="labelPayment" for="paymentMethod">Способ оплаты:</label>
+      <select id="paymentMethod" required>
+        <option value="Наличные" id="optCash">Наличные</option>
+        <option value="Карта" id="optCard">Карта / Терминал</option>
+        <option value="Безналичный расчет" id="optBank">Безналичный расчет (для Юрлиц)</option>
+      </select>
+    </div>
+
+    <button type="submit" id="submitBtn" disabled>Отправить отчет</button>
+  </form>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+
+    const PRICE_PER_BOTTLE = 23000;
+
+    const translations = {
+      ru: {
+        title: "Отчет курьера",
+        courier: "Курьер (Имя Фамилия):",
+        clientId: "ID абонента / клиента:",
+        clientType: "Тип клиента:",
+        individual: "Физлицо",
+        legal: "Юрлицо",
+        full: "Отдал полных бутылей (шт):",
+        total: "Сумма к оплате:",
+        currency: "сум",
+        empty: "Забрал пустых бутылей (шт): *",
+        emptyPlaceholder: "Например: 0",
+        payment: "Способ оплаты:",
+        optCash: "Наличные",
+        optCard: "Карта / Терминал",
+        optBank: "Безналичный расчет (для Юрлиц)",
+        submit: "Отправить отчет"
+      },
+      uz: {
+        title: "Kuryer hisoboti",
+        courier: "Kuryer (Ismi Familiyasi):",
+        clientId: "Abonent / mijoz ID raqami:",
+        clientType: "Mijoz turi:",
+        individual: "Jismoniy shaxs",
+        legal: "Yuridik shaxs",
+        full: "Berilgan to'liq idishlar (dona):",
+        total: "To'lanishi kerak:",
+        currency: "so'm",
+        empty: "Olingan bo'sh idishlar (dona): *",
+        emptyPlaceholder: "Masalan: 0",
+        payment: "To'lov turi:",
+        optCash: "Naqd pul",
+        optCard: "Karta / Terminal",
+        optBank: "Pul o'tkazmasi (Yuridik shaxslar uchun)",
+        submit: "Hisobotni yuborish"
+      }
+    };
+
+    let currentLang = 'ru';
+
+    function setLanguage(lang) {
+      currentLang = lang;
+      const t = translations[lang];
+
+      document.getElementById('btnRu').classList.toggle('active', lang === 'ru');
+      document.getElementById('btnUz').classList.toggle('active', lang === 'uz');
+
+      document.getElementById('formTitle').innerText = t.title;
+      document.getElementById('labelCourier').innerText = t.courier;
+      document.getElementById('labelClientId').innerText = t.clientId;
+      document.getElementById('labelClientType').innerText = t.clientType;
+      document.getElementById('textIndividual').innerText = t.individual;
+      document.getElementById('textLegal').innerText = t.legal;
+      document.getElementById('labelFull').innerText = t.full;
+      document.getElementById('labelTotal').innerText = t.total;
+      document.getElementById('labelEmpty').innerText = t.empty;
+      document.getElementById('emptyBottles').placeholder = t.emptyPlaceholder;
+      document.getElementById('labelPayment').innerText = t.payment;
+      
+      document.getElementById('optCash').innerText = t.optCash;
+      document.getElementById('optCard').innerText = t.optCard;
+      document.getElementById('optBank').innerText = t.optBank;
+      
+      document.getElementById('submitBtn').innerText = t.submit;
+
+      updateTotalPrice();
+    }
+
+    const fullBottlesInput = document.getElementById('fullBottles');
+    const totalAmountEl = document.getElementById('totalAmount');
+
+    function updateTotalPrice() {
+      const count = parseInt(fullBottlesInput.value) || 0;
+      const total = count * PRICE_PER_BOTTLE;
+      const currency = translations[currentLang].currency;
+      totalAmountEl.innerText = `${total.toLocaleString('ru-RU')} ${currency}`;
+    }
+
+    fullBottlesInput.addEventListener('input', updateTotalPrice);
+
+    const emptyInput = document.getElementById('emptyBottles');
+    const submitBtn = document.getElementById('submitBtn');
+
+    emptyInput.addEventListener('input', () => {
+      if (emptyInput.value !== "" && parseInt(emptyInput.value) >= 0) {
+        submitBtn.removeAttribute('disabled');
+      } else {
+        submitBtn.setAttribute('disabled', 'true');
+      }
+    });
+
+    const courierInput = document.getElementById('courierName');
+    if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+      const user = tg.initDataUnsafe.user;
+      const firstName = user.first_name || '';
+      const lastName = user.last_name || '';
+      courierInput.value = `${firstName} ${lastName}`.trim();
+    } else {
+      courierInput.value = "Test Courier";
+    }
+
+    const form = document.getElementById('deliveryForm');
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      const courier = courierInput.value;
+      const clientId = document.getElementById('clientId').value;
+      const clientTypeRaw = document.querySelector('input[name="clientType"]:checked').value;
+      let clientType = currentLang === 'uz' ? (clientTypeRaw === 'Физлицо' ? 'Jismoniy shaxs' : 'Yuridik shaxs') : clientTypeRaw;
+      
+      const fullBottles = fullBottlesInput.value;
+      const totalSum = (parseInt(fullBottles) || 0) * PRICE_PER_BOTTLE;
+      const currency = translations[currentLang].currency;
+      
+      const emptyBottles = emptyInput.value;
+      const paymentMethod = document.getElementById('paymentMethod').value;
+
+      const reportText = 
+        `[ОТЧЕТ КУРЬЕРА]\n` +
+        `Курьер: ${courier}\n` +
+        `ID абонента: ${clientId}\n` +
+        `Тип клиента: ${clientType}\n` +
+        `Отдал: ${fullBottles}\n` +
+        `Сумма: ${totalSum.toLocaleString('ru-RU')} ${currency}\n` +
+        `Забрал: ${emptyBottles}\n` +
+        `Оплата: ${paymentMethod}`;
+
+      tg.sendData(reportText);
+    });
+
+    updateTotalPrice();
+  </script>
+</body>
+</html>

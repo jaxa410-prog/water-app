@@ -4,7 +4,7 @@ import logging
 import os
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart
-from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, Update
 from aiohttp import web
 
 # Логирование
@@ -14,10 +14,15 @@ TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 8080))  # Render передает порт через эту переменную
 
+# Ссылка на ваше приложение на Render (автоматически или вручную)
+WEB_SERVER_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com")
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# 1. Раздача index.html через aiohttp
+# 1. Раздача index.html и healthcheck через aiohttp
 async def handle_index(request):
     try:
         if os.path.exists("index.html"):
@@ -29,18 +34,26 @@ async def handle_index(request):
 async def handle_health(request):
     return web.Response(text="OK", status=200)
 
-# 2. Обработчики Aiogram
+# 2. Обработчик входящих запросов от Telegram (Webhook)
+async def handle_webhook(request):
+    try:
+        data = await request.json()
+        telegram_update = Update.model_validate(data, context={"bot": bot})
+        await dp.feed_update(bot, telegram_update)
+        return web.Response(text="OK", status=200)
+    except Exception as e:
+        logging.error(f"Ошибка обработки вебхука: {e}")
+        return web.Response(text=str(e), status=500)
+
+# 3. Обработчики Aiogram
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    # Берем адрес приложения из публичной ссылки Render или задаем вручную
-    web_app_url = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com")
-    
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="📦 Открыть отчет курьера",
-                    web_app=WebAppInfo(url=web_app_url)
+                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
                 )
             ]
         ]
@@ -89,11 +102,16 @@ async def handle_web_app_data(message: types.Message):
         await message.answer("❌ Произошла ошибка при сохранении отчета.")
 
 
-# 3. Единый запуск веб-сервера и бота
+# 4. Настройка приложения и запуск веб-сервера
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+
+    # Устанавливаем вебхук в Telegram при старте
+    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
+    logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -101,8 +119,11 @@ async def main():
     await site.start()
     logging.info(f"Веб-сервер запущен на порту {PORT}")
 
-    # Запускаем поллинг бота
-    await dp.start_polling(bot)
+    # Удерживаем приложение запущенным
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        asyncio.run(bot.session.close())

@@ -4,7 +4,8 @@ import logging
 import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, Update
+from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
 # Логирование
@@ -32,19 +33,6 @@ async def handle_index(request):
 async def handle_health(request):
     return web.Response(text="OK", status=200)
 
-async def handle_webhook(request):
-    try:
-        data = await request.json()
-        # ВЫВОДИМ СЫРОЙ JSON В ЛОГИ RENDER ДЛЯ АНАЛИЗА
-        logging.info(f"📦 ПОЛУЧЕН СЫРОЙ UPDATE ОТ TELEGRAM: {json.dumps(data, ensure_ascii=False)}")
-        
-        telegram_update = Update.model_validate(data, context={"bot": bot})
-        await dp.feed_update(bot, telegram_update)
-        return web.Response(text="OK", status=200)
-    except Exception as e:
-        logging.error(f"❌ Ошибка обработки вебхука: {e}")
-        return web.Response(text=str(e), status=500)
-
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(
@@ -52,7 +40,7 @@ async def cmd_start(message: types.Message):
             [
                 InlineKeyboardButton(
                     text="📦 Открыть отчет курьера",
-                    web_app=WebAppInfo(url=f"{WEB_SERVER_HOST}/?v=2")
+                    web_app=WebAppInfo(url=f"{WEB_SERVER_HOST}/?v=3")
                 )
             ]
         ]
@@ -114,7 +102,14 @@ async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+
+    # Регистрация стандартного обработчика вебхуков aiogram
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+    )
+    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
 
     await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
     logging.info(f"Вебхук установлен: {WEBHOOK_URL}")

@@ -11,7 +11,7 @@
             background-color: var(--tg-theme-bg-color, #f4f4f9);
             color: var(--tg-theme-text-color, #333);
             margin: 0;
-            padding: 20px;
+            padding: 16px;
             box-sizing: border-box;
         }
         .container {
@@ -19,82 +19,169 @@
             margin: 0 auto;
             background: var(--tg-theme-secondary-bg-color, #ffffff);
             padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+            border-radius: 14px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
-        h2 {
-            text-align: center;
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 20px;
         }
+        h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+        .lang-switch {
+            display: flex;
+            background: #e5e5ea;
+            border-radius: 8px;
+            padding: 2px;
+        }
+        .lang-btn {
+            background: transparent;
+            border: none;
+            padding: 6px 10px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 6px;
+            color: #666;
+        }
+        .lang-btn.active {
+            background: #fff;
+            color: #000;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 14px;
         }
         label {
             display: block;
-            margin-bottom: 5px;
+            margin-bottom: 6px;
             font-weight: 600;
             font-size: 14px;
         }
-        input {
+        input, select {
             width: 100%;
-            padding: 10px;
+            padding: 10px 12px;
             border: 1px solid #ccc;
             border-radius: 8px;
             box-sizing: border-box;
-            font-size: 16px;
+            font-size: 15px;
+            background-color: var(--tg-theme-bg-color, #fff);
+            color: var(--tg-theme-text-color, #000);
         }
-        .price-info {
-            background-color: #f0f8ff;
+        .radio-group {
+            display: flex;
+            gap: 10px;
+        }
+        .radio-option {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
             padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            background: #f9f9f9;
+        }
+        .radio-option input[type="radio"] {
+            width: auto;
+            margin: 0;
+        }
+        .price-card {
+            background-color: #eef6ff;
+            border: 1px solid #b6d4fe;
+            padding: 12px;
             border-radius: 8px;
             font-weight: bold;
-            color: #007bff;
-            margin-bottom: 15px;
+            color: #0d6efd;
+            margin: 18px 0;
             text-align: center;
+            font-size: 16px;
         }
-        button {
+        button.submit-btn {
             width: 100%;
-            padding: 12px;
-            background-color: #28a745;
+            padding: 14px;
+            background-color: #0088cc;
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
-            transition: background-color 0.2s;
+            transition: background-color 0.2s, opacity 0.2s;
         }
-        button:disabled {
+        button.submit-btn:disabled {
             background-color: #cccccc;
             cursor: not-allowed;
+            opacity: 0.7;
         }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>📦 Отчет о доставке</h2>
-
-    <div class="form-group">
-        <label for="address">📍 Адрес доставки:</label>
-        <input type="text" id="address" placeholder="Улица, дом, квартира">
+    <div class="header-row">
+        <h2 id="ui-title">📦 Отчет о доставке</h2>
+        <div class="lang-switch">
+            <button class="lang-btn active" id="btn-ru" onclick="setLanguage('ru')">RU</button>
+            <button class="lang-btn" id="btn-uz" onclick="setLanguage('uz')">UZ</button>
+        </div>
     </div>
 
+    <!-- ID Абонента -->
     <div class="form-group">
-        <label for="delivered">🍾 Сдал полных бутылей:</label>
+        <label for="client_id" id="lbl-client-id">🆔 ID абонента:</label>
+        <input type="number" id="client_id" placeholder="Введите ID абонента" oninput="validateForm()">
+    </div>
+
+    <!-- Сдал полных -->
+    <div class="form-group">
+        <label for="delivered" id="lbl-delivered">🍾 Сдал полных бутылей:</label>
         <input type="number" id="delivered" value="1" min="1" oninput="calculateTotal()">
     </div>
 
+    <!-- Принял пустых -->
     <div class="form-group">
-        <label for="returned">🧴 Принял пустых бутылей:</label>
-        <input type="number" id="returned" placeholder="Укажите кол-во" oninput="validateForm()">
+        <label for="returned" id="lbl-returned">🧴 Принял пустых бутылей:</label>
+        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" oninput="validateForm()">
     </div>
 
-    <div class="price-info">
-        Сумма к оплате: <span id="total-price">23 000</span> сум
+    <!-- Тип клиента -->
+    <div class="form-group">
+        <label id="lbl-client-type">👤 Тип клиента:</label>
+        <div class="radio-group">
+            <label class="radio-option">
+                <input type="radio" name="client_type" value="Физ. лицо" checked> <span id="opt-fiz">Физ. лицо</span>
+            </label>
+            <label class="radio-option">
+                <input type="radio" name="client_type" value="Юр. лицо"> <span id="opt-yur">Юр. лицо</span>
+            </label>
+        </div>
     </div>
 
-    <button id="send-btn" disabled onclick="sendReport()">Отправить отчет</button>
+    <!-- Тип оплаты -->
+    <div class="form-group">
+        <label for="payment_type" id="lbl-payment">💳 Тип оплаты:</label>
+        <select id="payment_type">
+            <option value="Наличный" id="pay-cash">Наличный</option>
+            <option value="Click">Click</option>
+            <option value="Перечисление" id="pay-bank">Перечисление</option>
+        </select>
+    </div>
+
+    <!-- Расчет суммы -->
+    <div class="price-card">
+        <span id="lbl-total">К оплате:</span> <span id="total-price">23 000</span> сум
+    </div>
+
+    <button class="submit-btn" id="send-btn" disabled onclick="sendReport()">Отправить отчет</button>
 </div>
 
 <script>
@@ -102,6 +189,64 @@
     tg.expand();
 
     const PRICE_PER_BOTTLE = 23000;
+    let currentLang = 'ru';
+
+    const translations = {
+        ru: {
+            title: "📦 Отчет о доставке",
+            clientId: "🆔 ID абонента:",
+            clientPlaceholder: "Введите ID абонента",
+            delivered: "🍾 Сдал полных бутылей:",
+            returned: "🧴 Принял пустых бутылей:",
+            returnedPlaceholder: "Укажите кол-во (даже 0)",
+            clientType: "👤 Тип клиента:",
+            fiz: "Физ. лицо",
+            yur: "Юр. лицо",
+            payment: "💳 Тип оплаты:",
+            payCash: "Наличный",
+            payBank: "Перечисление",
+            total: "К оплате:",
+            btn: "Отправить отчет"
+        },
+        uz: {
+            title: "📦 Yetkazib berish hisoboti",
+            clientId: "🆔 Abonent ID:",
+            clientPlaceholder: "Abonent ID raqamini kiriting",
+            delivered: "🍾 To'liq idishlar berildi:",
+            returned: "🧴 Bo'sh idishlar olindi:",
+            returnedPlaceholder: "Miqdorini kiriting (0 ham)",
+            clientType: "👤 Mijoz turi:",
+            fiz: "Jismoniy",
+            yur: "Yuridik",
+            payment: "💳 To'lov turi:",
+            payCash: "Naqd pul",
+            payBank: "Ko'chirma (Pul o'tkazish)",
+            total: "To'lash uchun:",
+            btn: "Hisobotni yuborish"
+        }
+    };
+
+    function setLanguage(lang) {
+        currentLang = lang;
+        document.getElementById('btn-ru').classList.toggle('active', lang === 'ru');
+        document.getElementById('btn-uz').classList.toggle('active', lang === 'uz');
+
+        const t = translations[lang];
+        document.getElementById('ui-title').innerText = t.title;
+        document.getElementById('lbl-client-id').innerText = t.clientId;
+        document.getElementById('client_id').placeholder = t.clientPlaceholder;
+        document.getElementById('lbl-delivered').innerText = t.delivered;
+        document.getElementById('lbl-returned').innerText = t.returned;
+        document.getElementById('returned').placeholder = t.returnedPlaceholder;
+        document.getElementById('lbl-client-type').innerText = t.clientType;
+        document.getElementById('opt-fiz').innerText = t.fiz;
+        document.getElementById('opt-yur').innerText = t.yur;
+        document.getElementById('lbl-payment').innerText = t.payment;
+        document.getElementById('pay-cash').innerText = t.payCash;
+        document.getElementById('pay-bank').innerText = t.payBank;
+        document.getElementById('lbl-total').innerText = t.total;
+        document.getElementById('send-btn').innerText = t.btn;
+    }
 
     function calculateTotal() {
         const count = parseInt(document.getElementById('delivered').value) || 0;
@@ -111,28 +256,32 @@
     }
 
     function validateForm() {
-        const address = document.getElementById('address').value.trim();
-        const delivered = document.getElementById('delivered').value;
-        const returned = document.getElementById('returned').value;
+        const clientId = document.getElementById('client_id').value.trim();
+        const delivered = document.getElementById('delivered').value.trim();
+        const returned = document.getElementById('returned').value.trim();
         const btn = document.getElementById('send-btn');
 
-        // Кнопка активна ТОЛЬКО если пустые бутыли заполнены (даже если 0) и адрес не пустой
-        if (address !== "" && delivered !== "" && returned !== "") {
+        if (clientId !== "" && delivered !== "" && returned !== "") {
             btn.disabled = false;
         } else {
             btn.disabled = true;
         }
     }
 
-    document.getElementById('address').addEventListener('input', validateForm);
-
     function sendReport() {
+        const clientType = document.querySelector('input[name="client_type"]:checked').value;
+        const paymentType = document.getElementById('payment_type').value;
+
         const data = {
-            address: document.getElementById('address').value,
+            client_id: document.getElementById('client_id').value,
             delivered: document.getElementById('delivered').value,
             returned: document.getElementById('returned').value,
-            total_price: parseInt(document.getElementById('delivered').value) * PRICE_PER_BOTTLE
+            client_type: clientType,
+            payment_type: paymentType,
+            total_price: parseInt(document.getElementById('delivered').value) * PRICE_PER_BOTTLE,
+            language: currentLang
         };
+
         tg.sendData(JSON.stringify(data));
         tg.close();
     }

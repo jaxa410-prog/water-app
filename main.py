@@ -35,11 +35,14 @@ async def handle_health(request):
 async def handle_webhook(request):
     try:
         data = await request.json()
+        # ВЫВОДИМ СЫРОЙ JSON В ЛОГИ RENDER ДЛЯ АНАЛИЗА
+        logging.info(f"📦 ПОЛУЧЕН СЫРОЙ UPDATE ОТ TELEGRAM: {json.dumps(data, ensure_ascii=False)}")
+        
         telegram_update = Update.model_validate(data, context={"bot": bot})
         await dp.feed_update(bot, telegram_update)
         return web.Response(text="OK", status=200)
     except Exception as e:
-        logging.error(f"Ошибка обработки вебхука: {e}")
+        logging.error(f"❌ Ошибка обработки вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
 @dp.message(CommandStart())
@@ -49,7 +52,7 @@ async def cmd_start(message: types.Message):
             [
                 InlineKeyboardButton(
                     text="📦 Открыть отчет курьера",
-                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
+                    web_app=WebAppInfo(url=f"{WEB_SERVER_HOST}/?v=2")
                 )
             ]
         ]
@@ -59,7 +62,6 @@ async def cmd_start(message: types.Message):
 # Ловим любые сообщения, включая данные из Web App
 @dp.message()
 async def catch_all_messages(message: types.Message):
-    # Логируем вообще всё, что приходит
     logging.info(f"Получено сообщение от пользователя ID: {message.from_user.id}")
     logging.info(f"Содержимое message.web_app_data: {message.web_app_data}")
     
@@ -103,7 +105,7 @@ async def catch_all_messages(message: types.Message):
 
         except Exception as e:
             logging.error(f"❌ Ошибка при разборе JSON или отправке: {e}")
-            await message.answer(f"❌ Прошибка обработки отчета: {e}")
+            await message.answer(f"❌ Ошибка обработки отчета: {e}")
     else:
         if message.text and not message.text.startswith("/"):
             await message.answer("Пожалуйста, используйте кнопку «📦 Открыть отчет курьера» для отправки данных.")

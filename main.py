@@ -12,9 +12,8 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-PORT = int(os.getenv("PORT", 8080))  # Render передает порт через эту переменную
+PORT = int(os.getenv("PORT", 8080))
 
-# Ссылка на ваше приложение на Render
 WEB_SERVER_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
@@ -22,7 +21,6 @@ WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# 1. Раздача index.html и healthcheck через aiohttp
 async def handle_index(request):
     try:
         if os.path.exists("index.html"):
@@ -34,7 +32,6 @@ async def handle_index(request):
 async def handle_health(request):
     return web.Response(text="OK", status=200)
 
-# 2. Обработчик входящих запросов от Telegram (Webhook)
 async def handle_webhook(request):
     try:
         data = await request.json()
@@ -45,7 +42,6 @@ async def handle_webhook(request):
         logging.error(f"Ошибка обработки вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
-# 3. Обработчики Aiogram
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(
@@ -60,16 +56,19 @@ async def cmd_start(message: types.Message):
     )
     await message.answer("Нажмите кнопку ниже для заполнения отчета:", reply_markup=keyboard)
 
-
+# Ловим любые сообщения, включая данные из Web App
 @dp.message()
 async def catch_all_messages(message: types.Message):
-    # Логируем вообще любое входящее сообщение или данные из Web App
-    logging.info(f"Получено сообщение от {message.from_user.id}. WebApp data: {message.web_app_data}")
+    # Логируем вообще всё, что приходит
+    logging.info(f"Получено сообщение от пользователя ID: {message.from_user.id}")
+    logging.info(f"Содержимое message.web_app_data: {message.web_app_data}")
     
     if message.web_app_data:
-        logging.info(f"ДАННЫЕ ИЗ MINI APP ПОЙМАНЫ: {message.web_app_data.data}")
+        raw_data = message.web_app_data.data
+        logging.info(f"🔥 ПОЙМАНЫ ДАННЫЕ ИЗ WEB APP: {raw_data}")
+        
         try:
-            data = json.loads(message.web_app_data.data)
+            data = json.loads(raw_data)
             client_id = data.get("client_id")
             delivered = data.get("delivered")
             returned = data.get("returned")
@@ -90,29 +89,31 @@ async def catch_all_messages(message: types.Message):
                 f"💰 **Сумма:** {formatted_price} сум"
             )
 
+            # Отправляем подтверждение пользователю
             await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
+            logging.info("Ответ пользователю в чат отправлен.")
 
+            # Отправляем в канал, если задан CHANNEL_ID
             if CHANNEL_ID:
                 target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
                 await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
                 logging.info(f"Отчет успешно отправлен в канал: {target_chat}")
+            else:
+                logging.warning("CHANNEL_ID не задан в переменных окружения Render!")
 
         except Exception as e:
-            logging.error(f"Ошибка при разборе JSON из Web App: {e}")
-            await message.answer("❌ Произошла ошибка при обработке данных отчета.")
+            logging.error(f"❌ Ошибка при разборе JSON или отправке: {e}")
+            await message.answer(f"❌ Прошибка обработки отчета: {e}")
     else:
-        if message.text != "/start":
+        if message.text and not message.text.startswith("/"):
             await message.answer("Пожалуйста, используйте кнопку «📦 Открыть отчет курьера» для отправки данных.")
 
-
-# 4. Настройка приложения и запуск веб-сервера
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
 
-    # Устанавливаем вебхук в Telegram при старте
     await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
     logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
 
@@ -122,7 +123,6 @@ async def main():
     await site.start()
     logging.info(f"Веб-сервер запущен на порту {PORT}")
 
-    # Удерживаем приложение запущенным
     await asyncio.Event().wait()
 
 if __name__ == "__main__":

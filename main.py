@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, Update
 from aiohttp import web
@@ -14,7 +14,7 @@ TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 8080))  # Render передает порт через эту переменную
 
-# Ссылка на ваше приложение на Render (автоматически или вручную)
+# Ссылка на ваше приложение на Render
 WEB_SERVER_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
@@ -61,45 +61,48 @@ async def cmd_start(message: types.Message):
     await message.answer("Нажмите кнопку ниже для заполнения отчета:", reply_markup=keyboard)
 
 
-@dp.message(F.web_app_data)
-async def handle_web_app_data(message: types.Message):
-    logging.info(f"Получены данные из Mini App: {message.web_app_data.data}")
+@dp.message()
+async def catch_all_messages(message: types.Message):
+    # Логируем вообще любое входящее сообщение или данные из Web App
+    logging.info(f"Получено сообщение от {message.from_user.id}. WebApp data: {message.web_app_data}")
     
-    try:
-        data = json.loads(message.web_app_data.data)
-        
-        client_id = data.get("client_id")
-        delivered = data.get("delivered")
-        returned = data.get("returned")
-        client_type = data.get("client_type")
-        payment_type = data.get("payment_type")
-        total_price = data.get("total_price", 0)
-        
-        formatted_price = f"{total_price:,}".replace(",", " ")
-        
-        report_text = (
-            f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
-            f"👤 **Курьер:** {message.from_user.full_name} (@{message.from_user.username or 'нет_юзернейма'})\n"
-            f"🆔 **ID абонента:** `{client_id}`\n"
-            f"💧 **Сдал полных (19л):** {delivered} шт.\n"
-            f"🔄 **Принял пустых (19л):** {returned} шт.\n"
-            f"👥 **Тип клиента:** {client_type}\n"
-            f"💳 **Тип оплаты:** {payment_type}\n"
-            f"💰 **Сумма:** {formatted_price} сум"
-        )
+    if message.web_app_data:
+        logging.info(f"ДАННЫЕ ИЗ MINI APP ПОЙМАНЫ: {message.web_app_data.data}")
+        try:
+            data = json.loads(message.web_app_data.data)
+            client_id = data.get("client_id")
+            delivered = data.get("delivered")
+            returned = data.get("returned")
+            client_type = data.get("client_type")
+            payment_type = data.get("payment_type")
+            total_price = data.get("total_price", 0)
+            
+            formatted_price = f"{total_price:,}".replace(",", " ")
+            
+            report_text = (
+                f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
+                f"👤 **Курьер:** {message.from_user.full_name} (@{message.from_user.username or 'нет_юзернейма'})\n"
+                f"🆔 **ID абонента:** `{client_id}`\n"
+                f"💧 **Сдал полных (19л):** {delivered} шт.\n"
+                f"🔄 **Принял пустых (19л):** {returned} шт.\n"
+                f"👥 **Тип клиента:** {client_type}\n"
+                f"💳 **Тип оплаты:** {payment_type}\n"
+                f"💰 **Сумма:** {formatted_price} сум"
+            )
 
-        # Подтверждение курьеру
-        await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
+            await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
 
-        # Отправка в канал
-        if CHANNEL_ID:
-            target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
-            await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
-            logging.info(f"Отчет отправлен в канал/чат: {target_chat}")
+            if CHANNEL_ID:
+                target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
+                await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
+                logging.info(f"Отчет успешно отправлен в канал: {target_chat}")
 
-    except Exception as e:
-        logging.error(f"Ошибка обработки отчета: {e}")
-        await message.answer("❌ Произошла ошибка при сохранении отчета.")
+        except Exception as e:
+            logging.error(f"Ошибка при разборе JSON из Web App: {e}")
+            await message.answer("❌ Произошла ошибка при обработке данных отчета.")
+    else:
+        if message.text != "/start":
+            await message.answer("Пожалуйста, используйте кнопку «📦 Открыть отчет курьера» для отправки данных.")
 
 
 # 4. Настройка приложения и запуск веб-сервера

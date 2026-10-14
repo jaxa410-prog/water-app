@@ -32,218 +32,122 @@
             margin: 0;
             font-size: 20px;
         }
-        .lang-switch {
-            display: flex;
-            background: #e5e5ea;
-            border-radius: 8px;
-            padding: 2px;
-        }
-        .lang-btn {
-            background: transparent;
-            border: none;
-            padding: 6px 10px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            border-radius: 6px;
-            color: #666;
-        }
-        .lang-btn.active {
-            background: #fff;
-            color: #000;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
         .form-group {
-            margin-bottom: 14px;
+            margin-bottom: 15px;
         }
         label {
             display: block;
-            margin-bottom: 6px;
-            font-weight: 600;
+            margin-bottom: 5px;
+            font-weight: 500;
             font-size: 14px;
         }
         input, select {
             width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-            box-sizing: border-box;
-            font-size: 15px;
-            background-color: var(--tg-theme-bg-color, #fff);
-            color: var(--tg-theme-text-color, #000);
-        }
-        .radio-group {
-            display: flex;
-            gap: 10px;
-        }
-        .radio-option {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
             padding: 10px;
             border: 1px solid #ccc;
             border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            background: #f9f9f9;
-        }
-        .radio-option input[type="radio"] {
-            width: auto;
-            margin: 0;
-        }
-        .price-card {
-            background-color: #eef6ff;
-            border: 1px solid #b6d4fe;
-            padding: 12px;
-            border-radius: 8px;
-            font-weight: bold;
-            color: #0d6efd;
-            margin: 18px 0;
-            text-align: center;
+            box-sizing: border-box;
             font-size: 16px;
         }
-        button.submit-btn {
+        button {
             width: 100%;
-            padding: 14px;
-            background-color: #0088cc;
-            color: white;
+            padding: 12px;
+            background-color: var(--tg-theme-button-color, #2481cc);
+            color: var(--tg-theme-button-text-color, #ffffff);
             border: none;
-            border-radius: 10px;
+            border-radius: 8px;
             font-size: 16px;
-            font-weight: bold;
+            font-weight: 600;
             cursor: pointer;
-            transition: background-color 0.2s, opacity 0.2s;
-        }
-        button.submit-btn:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-            opacity: 0.7;
+            margin-top: 10px;
         }
     </style>
 </head>
 <body>
-
-<div class="container">
-    <div class="header-row">
-        <h2 id="ui-title">📦 Отчет о доставке</h2>
-        <div class="lang-switch">
-            <button class="lang-btn active" id="btn-ru" onclick="setLanguage('ru')">RU</button>
-            <button class="lang-btn" id="btn-uz" onclick="setLanguage('uz')">UZ</button>
-        </div>
-    </div>
-
-    <!-- ID Абонента -->
-    <div class="form-group">
-        <label for="client_id" id="lbl-client-id">🆔 ID абонента:</label>
-        <input type="number" id="client_id" placeholder="Введите ID абонента" oninput="validateForm()">
-    </div>
-
-    <!-- Сдал полных 19л -->
-    <div class="form-group">
-        <label for="delivered" id="lbl-delivered">💧 Сдал полных (19л):</label>
-        <input type="number" id="delivered" placeholder="Укажите кол-во" min="0" oninput="calculateTotal()">
-    </div>
-
-    <!-- Принял пустых 19л -->
-    <div class="form-group">
-        <label for="returned" id="lbl-returned">🔄 Принял пустых (19л):</label>
-        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" min="0" oninput="validateForm()">
-    </div>
-
-    <!-- Тип клиента -->
-    <div class="form-group">
-        <label id="lbl-client-type">👤 Тип клиента:</label>
-        <div class="radio-group">
-            <label class="radio-option">
-                <input type="radio" name="client_type" value="Физ. лицо" checked> <span id="opt-fiz">Физ. лицо</span>
-            </label>
-            <label class="radio-option">
-                <input type="radio" name="client_type" value="Юр. лицо"> <span id="opt-ur">Юр. лицо</span>
-            </label>
-        </div>
-    </div>
-
-    <!-- Тип оплаты -->
-    <div class="form-group">
-        <label for="payment_type" id="lbl-payment">💳 Тип оплаты:</label>
-        <select id="payment_type">
-            <option value="Наличные">Наличные</option>
-            <option value="Перевод (Click/Payme)">Перевод (Click/Payme)</option>
-            <option value="Терминал">Терминал</option>
-            <option value="Долг">Долг</option>
-        </select>
-    </div>
-
-    <!-- Итоговая сумма -->
-    <div class="price-card" id="price-card">
-        💰 Сумма: 0 сум
-    </div>
-
-    <!-- Кнопка отправки -->
-    <button class="submit-btn" id="submit-btn" onclick="submitReport()" disabled>Отправить отчет</button>
-</div>
-
-<script>
-    let tg = window.Telegram.WebApp;
-    tg.expand(); // Разворачиваем Mini App на весь экран
-
-    const PRICE_PER_BOTTLE = 25000; // Пример цены за 1 бут (можете изменить под себя)
-
-    function calculateTotal() {
-        let delivered = parseInt(document.getElementById('delivered').value) || 0;
-        let total = delivered * PRICE_PER_BOTTLE;
+    <div class="container">
+        <h2>Отчет о доставке</h2>
         
-        document.getElementById('price-card').innerText = `💰 Сумма: ${total.toLocaleString('ru-RU')} сум`;
-        window.currentTotal = total;
-        validateForm();
-    }
+        <div class="form-group">
+            <label for="clientId">ID абонента:</label>
+            <input type="text" id="clientId" placeholder="Введите ID клиента">
+        </div>
 
-    function validateForm() {
-        let clientId = document.getElementById('client_id').value.trim();
-        let delivered = document.getElementById('delivered').value.trim();
-        let returned = document.getElementById('returned').value.trim();
-        let btn = document.getElementById('submit-btn');
+        <div class="form-group">
+            <label for="deliveredCount">Сдал полных (19л):</label>
+            <input type="number" id="deliveredCount" value="0" min="0">
+        </div>
 
-        // Кнопка активна, только если заполнены ID, сданные и принятые бутыли
-        if (clientId !== "" && delivered !== "" && returned !== "") {
-            btn.removeAttribute('disabled');
-        } else {
-            btn.setAttribute('disabled', 'true');
+        <div class="form-group">
+            <label for="returnedCount">Принял пустых (19л):</label>
+            <input type="number" id="returnedCount" value="0" min="0">
+        </div>
+
+        <div class="form-group">
+            <label for="clientType">Тип клиента:</label>
+            <select id="clientType">
+                <option value="Физическое лицо">Физическое лицо</option>
+                <option value="Юридическое лицо">Юридическое лицо</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="paymentType">Тип оплаты:</label>
+            <select id="paymentType">
+                <option value="Наличные">Наличные</option>
+                <option value="Click / Payme">Click / Payme</option>
+                <option value="Перечисление">Перечисление</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="totalPrice">Сумма (сум):</label>
+            <input type="number" id="totalPrice" value="0" min="0">
+        </div>
+
+        <button onclick="sendReport()">Отправить отчет</button>
+    </div>
+
+    <script>
+        let tg = window.Telegram.WebApp;
+        tg.expand();
+
+        function sendReport() {
+            const data = {
+                client_id: document.getElementById('clientId').value,
+                delivered: document.getElementById('deliveredCount').value,
+                returned: document.getElementById('returnedCount').value,
+                client_type: document.getElementById('clientType').value,
+                payment_type: document.getElementById('paymentType').value,
+                total_price: document.getElementById('totalPrice').value
+            };
+
+            if (!data.client_id) {
+                alert('Пожалуйста, введите ID абонента!');
+                return;
+            }
+
+            // Отправляем данные напрямую на наш сервер через fetch
+            fetch('/api/report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'ok') {
+                    alert('✅ Отчет успешно отправлен!');
+                    tg.close();
+                } else {
+                    alert('❌ Ошибка: ' + (result.message || 'не удалось отправить'));
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка:', error);
+                alert('❌ Сетевая ошибка при отправке');
+            });
         }
-    }
-
-    function submitReport() {
-        let clientId = document.getElementById('client_id').value;
-        let delivered = document.getElementById('delivered').value;
-        let returned = document.getElementById('returned').value;
-        let clientType = document.querySelector('input[name="client_type"]:checked').value;
-        let paymentType = document.getElementById('payment_type').value;
-        let totalPrice = window.currentTotal || 0;
-
-        let data = {
-            client_id: clientId,
-            delivered: delivered,
-            returned: returned,
-            client_type: clientType,
-            payment_type: paymentType,
-            total_price: totalPrice
-        };
-
-        // САМОЕ ВАЖНОЕ: Передаем данные боту и закрываем приложение
-        tg.sendData(JSON.stringify(data));
-        tg.close();
-    }
-
-    // Переключение языков (опционально)
-    function setLanguage(lang) {
-        document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
-        document.getElementById(`btn-${lang}`).classList.add('active');
-        // Здесь можно добавить тексты для узбекского языка, если потребуется
-    }
-</script>
-
+    </script>
 </body>
 </html>

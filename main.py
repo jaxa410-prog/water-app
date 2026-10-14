@@ -3,9 +3,9 @@ import json
 import logging
 import os
 from aiogram import Bot, types
-from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from aiohttp import web
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TOKEN")
@@ -23,7 +23,7 @@ async def handle_index(request):
 async def handle_health(request):
     return web.Response(text="OK", status=200)
 
-# Прямой прием данных из веб-приложения минуя телеграм-вебхуки
+# Прямой прием данных из веб-приложения через fetch
 async def handle_report(request):
     try:
         data = await request.json()
@@ -48,14 +48,14 @@ async def handle_report(request):
             f"💰 **Сумма:** {formatted_price} сум"
         )
 
-        # Отправляем в канал
+        # Отправляем в Telegram-канал
         if CHANNEL_ID:
             target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
             await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
             logging.info(f"Отчет успешно отправлен в канал: {target_chat}")
             return web.json_response({"status": "ok"})
         else:
-            logging.warning("CHANNEL_ID не задан!")
+            logging.warning("CHANNEL_ID не задан в переменных окружения!")
             return web.json_response({"status": "error", "message": "CHANNEL_ID not set"}, status=500)
 
     except Exception as e:
@@ -66,15 +66,18 @@ async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
-    app.router.add_post("/api/report", handle_report) # Наш новый прямой эндпоинт
+    app.router.add_post("/api/report", handle_report)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logging.info(f"Сервер запущен на порту {PORT}")
+    logging.info(f"Сервер успешно запущен на порту {PORT}")
 
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        asyncio.run(bot.session.close())

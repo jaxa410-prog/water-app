@@ -117,11 +117,6 @@
             cursor: pointer;
             transition: background-color 0.2s, opacity 0.2s;
         }
-        button.submit-btn:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-            opacity: 0.7;
-        }
     </style>
 </head>
 <body>
@@ -138,7 +133,7 @@
     <!-- ID Абонента -->
     <div class="form-group">
         <label for="client_id" id="lbl-client-id">🆔 ID абонента:</label>
-        <input type="number" id="client_id" placeholder="Введите ID абонента" oninput="validateForm()">
+        <input type="number" id="client_id" placeholder="Введите ID абонента">
     </div>
 
     <!-- Сдал полных 19л -->
@@ -150,7 +145,7 @@
     <!-- Принял пустых 19л -->
     <div class="form-group">
         <label for="returned" id="lbl-returned">🔄 Принял пустых (19л):</label>
-        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" min="0" oninput="validateForm()">
+        <input type="number" id="returned" placeholder="Укажите кол-во (даже 0)" min="0">
     </div>
 
     <!-- Тип клиента -->
@@ -181,7 +176,7 @@
         <span id="lbl-total">К оплате:</span> <span id="total-price">0</span> сум
     </div>
 
-    <button class="submit-btn" id="send-btn" disabled onclick="sendReport()">Отправить отчет</button>
+    <button class="submit-btn" id="send-btn" onclick="sendReport()">Отправить отчет</button>
 </div>
 
 <script>
@@ -255,47 +250,43 @@
         const count = parseInt(document.getElementById('delivered').value) || 0;
         const total = count * PRICE_PER_BOTTLE;
         document.getElementById('total-price').innerText = total.toLocaleString('ru-RU');
-        validateForm();
-    }
-
-    function validateForm() {
-        const clientId = document.getElementById('client_id').value.trim();
-        const delivered = document.getElementById('delivered').value.trim();
-        const returned = document.getElementById('returned').value.trim();
-        const btn = document.getElementById('send-btn');
-
-        if (clientId !== "" && delivered !== "" && returned !== "") {
-            btn.disabled = false;
-        } else {
-            btn.disabled = true;
-        }
     }
 
     function sendReport() {
+        const clientId = document.getElementById('client_id').value.trim();
+        const delivered = document.getElementById('delivered').value.trim();
+        const returned = document.getElementById('returned').value.trim();
+
+        if (!clientId || !delivered || returned === "") {
+            alert("Заполните все поля перед отправкой!");
+            return;
+        }
+
         const clientType = document.querySelector('input[name="client_type"]:checked').value;
         const paymentType = document.getElementById('payment_type').value;
-        const deliveredCount = parseInt(document.getElementById('delivered').value) || 0;
+        const deliveredCount = parseInt(delivered) || 0;
 
         const data = {
-            client_id: document.getElementById('client_id').value,
+            client_id: clientId,
             delivered: deliveredCount,
-            returned: document.getElementById('returned').value,
+            returned: parseInt(returned) || 0,
             client_type: clientType,
             payment_type: paymentType,
             total_price: deliveredCount * PRICE_PER_BOTTLE,
             language: currentLang
         };
 
+        alert("Отправляем: ID=" + clientId + ", Сдал=" + delivered);
+
         try {
-            // Проверяем, запущено ли приложение в Telegram
             if (window.Telegram && window.Telegram.WebApp) {
                 tg.sendData(JSON.stringify(data));
                 tg.close();
             } else {
-                alert("Ошибка: приложение запущено вне Telegram!");
+                alert("Ошибка: вне Telegram");
             }
         } catch (error) {
-            alert("Ошибка отправки: " + error.message);
+            alert("Ошибка SDK: " + error.message);
         }
     }
 </script>

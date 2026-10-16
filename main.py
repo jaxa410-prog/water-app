@@ -21,11 +21,8 @@ WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Файл для сохранения курьеров прямо на сервере
 COURIERS_FILE = "couriers.json"
 
-# Ваши права администратора (укажите СВОЙ Telegram ID через запятую, если их несколько)
-# Если переменная не задана в Render, первый запустивший команду может стать админом (или пропишите ID ниже)
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
 
@@ -108,7 +105,12 @@ HTML_CONTENT = """
             cursor: pointer;
             margin-top: 10px;
         }
-        button:active {
+        button:disabled {
+            background-color: #d1d5db;
+            color: #9ca3af;
+            cursor: not-allowed;
+        }
+        button:active:not(:disabled) {
             opacity: 0.8;
         }
     </style>
@@ -118,23 +120,22 @@ HTML_CONTENT = """
         <h2>💧 Отчет по доставке</h2>
         <form id="reportForm">
             <div class="form-group">
-                <label for="clientId">ID абонента:</label>
-                <input type="text" id="clientId" required placeholder="Например: 12345">
+                <label for="clientId">ID абонента / Фирма:</label>
+                <input type="text" id="clientId" required placeholder="Введите ID или название">
             </div>
             <div class="form-group">
                 <label for="delivered">Сдал полных (19л):</label>
-                <input type="number" id="delivered" min="0" value="1" required>
+                <input type="number" id="delivered" min="0" placeholder="0" required>
             </div>
             <div class="form-group">
                 <label for="returned">Принял пустых (19л):</label>
-                <input type="number" id="returned" min="0" value="1" required>
+                <input type="number" id="returned" min="0" placeholder="0" required>
             </div>
             <div class="form-group">
                 <label for="clientType">Тип клиента:</label>
                 <select id="clientType">
-                    <option value="Офис">Офис</option>
-                    <option value="Дом">Дом</option>
-                    <option value="Магазин">Магазин</option>
+                    <option value="Юр. лицо">Юр. лицо</option>
+                    <option value="Физ. лицо">Физ. лицо</option>
                 </select>
             </div>
             <div class="form-group">
@@ -148,9 +149,9 @@ HTML_CONTENT = """
             </div>
             <div class="form-group">
                 <label for="totalPrice">Сумма (сум):</label>
-                <input type="number" id="totalPrice" min="0" value="0" required>
+                <input type="number" id="totalPrice" min="0" placeholder="0" required>
             </div>
-            <button type="submit">Отправить отчет</button>
+            <button type="submit" id="submitBtn" disabled>Отправить отчет</button>
         </form>
     </div>
 
@@ -158,17 +159,48 @@ HTML_CONTENT = """
         const tg = window.Telegram.WebApp;
         tg.expand();
 
+        const PRICE_PER_BOTTLE = 23000;
+
+        const clientIdInput = document.getElementById('clientId');
+        const deliveredInput = document.getElementById('delivered');
+        const returnedInput = document.getElementById('returned');
+        const totalPriceInput = document.getElementById('totalPrice');
+        const submitBtn = document.getElementById('submitBtn');
+
+        // Проверка заполненности обязательных полей для активации кнопки
+        function validateForm() {
+            const clientIdVal = clientIdInput.value.trim();
+            const deliveredVal = deliveredInput.value.trim();
+            const returnedVal = returnedInput.value.trim();
+            
+            if (clientIdVal !== "" && deliveredVal !== "" && returnedVal !== "") {
+                submitBtn.removeAttribute('disabled');
+            } else {
+                submitBtn.setAttribute('disabled', 'true');
+            }
+        }
+
+        // Авторасчет суммы по 23 000 сум и проверка полей
+        deliveredInput.addEventListener('input', function() {
+            const count = parseInt(deliveredInput.value) || 0;
+            totalPriceInput.value = count * PRICE_PER_BOTTLE;
+            validateForm();
+        });
+
+        clientIdInput.addEventListener('input', validateForm);
+        returnedInput.addEventListener('input', validateForm);
+
         document.getElementById('reportForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const user = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : {};
 
             const data = {
-                client_id: document.getElementById('clientId').value,
-                delivered: document.getElementById('delivered').value,
-                returned: document.getElementById('returned').value,
+                client_id: clientIdInput.value,
+                delivered: deliveredInput.value,
+                returned: returnedInput.value,
                 client_type: document.getElementById('clientType').value,
                 payment_type: document.getElementById('paymentType').value,
-                total_price: document.getElementById('totalPrice').value,
+                total_price: totalPriceInput.value,
                 courier_id: user.id || 0,
                 courier_name: user.first_name ? (user.first_name + (user.last_name ? ' ' + user.last_name : '')) : 'Курьер',
                 courier_username: user.username || 'нет_юзернейма'
@@ -200,10 +232,9 @@ async def handle_webhook(request):
         return web.Response(text=str(e), status=500)
 
 
-# 2. Админские команды управления курьерами
+# 2. Команды управления курьерами
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
-    # Если список админов пуст, первый кто написал эту команду становится админом
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав администратора.")
         return
@@ -260,18 +291,14 @@ async def cmd_list_couriers(message: types.Message):
         await message.answer(text, parse_mode="Markdown")
 
 
-# 3. Основная логика для курьеров
+# 3. Основная логика
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     couriers = load_couriers()
 
-    # Если список курьеров пустой или пользователя в нем нет
     if couriers and user_id not in couriers:
-        # Если вдруг админ забыл добавить себя, даем ему доступ
-        if ADMIN_IDS and user_id in ADMIN_IDS:
-            pass
-        else:
+        if not (ADMIN_IDS and user_id in ADMIN_IDS):
             await message.answer(
                 f"⛔️ У вас нет доступа к системе отчетов.\nВаш Telegram ID: `{user_id}`", 
                 parse_mode="Markdown"
@@ -318,7 +345,7 @@ async def handle_web_app_data(message: types.Message):
         report_text = (
             f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
             f"👤 **Курьер:** {courier_name} (@{courier_username})\n"
-            f"🆔 **ID абонента:** `{client_id}`\n"
+            f"🆔 **ID / Фирма:** `{client_id}`\n"
             f"💧 **Сдал полных (19л):** {delivered} шт.\n"
             f"🔄 **Принял пустых (19л):** {returned} шт.\n"
             f"👥 **Тип клиента:** {client_type}\n"
@@ -353,6 +380,19 @@ async def main():
     await site.start()
     logging.info(f"Веб-сервер запущен на порту {PORT}")
 
+    async def ping_loop():
+        await asyncio.sleep(10)
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    async with session.get(f"{WEB_SERVER_HOST}/health") as resp:
+                        pass
+                except Exception:
+                    pass
+                await asyncio.sleep(600)
+
+    asyncio.create_task(ping_loop())
     await asyncio.Event().wait()
 
 if __name__ == "__main__":

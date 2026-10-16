@@ -2,10 +2,17 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
-from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, Update
+from aiogram.types import (
+    WebAppInfo, 
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton, 
+    ReplyKeyboardMarkup, 
+    KeyboardButton, 
+    Update
+)
 from aiohttp import web
 
 # Логирование
@@ -396,106 +403,182 @@ async def cmd_list_couriers(message: types.Message):
         await message.answer(text, parse_mode="Markdown")
 
 
-# 3. Основная логика
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    couriers = load_couriers()
-
-    if couriers and user_id not in couriers:
-        if not (ADMIN_IDS and user_id in ADMIN_IDS):
-            await message.answer(
-                f"⛔️ У вас нет доступа к системе отчетов.\nВаш Telegram ID: `{user_id}`", 
-                parse_mode="Markdown"
-            )
-            return
-
-    # Формируем клавиатуру для администратора или курьера
-    buttons = [
-        [KeyboardButton(text="💰 Мой заработок за сегодня")],
-        [KeyboardButton(text="📦 Открыть отчет / Hisobotni ochish")]
-    ]
-    
-    # Добавляем кнопку администратора
-    if not ADMIN_IDS or user_id in ADMIN_IDS:
-        buttons.insert(0, [KeyboardButton(text="📊 Статистика админа")])
-
-    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📦 Заполнить отчет (Mini App)",
-                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
-                )
-            ]
-        ]
-    )
-    
-    await message.answer(
-        "👋 Добро пожаловать!\nИспользуйте кнопку ниже для отправки отчета или меню для проверки статистики.", 
-        reply_markup=keyboard
-    )
-    await message.answer("Меню управления:", reply_markup=markup)
-
-
-# Обработка кнопки открытия отчета
-@dp.message(F.text == "📦 Открыть отчет / Hisobotni ochish")
-async def open_report_btn(message: types.Message):
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📦 Заполнить отчет (Mini App)",
-                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
-                )
-            ]
-        ]
-    )
-    await message.answer("Нажмите на кнопку ниже, чтобы открыть форму отчета:", reply_markup=keyboard)
-
-
-# Личная статистика курьера за сегодня
-@dp.message(F.text == "💰 Мой заработок за сегодня")
-async def check_today_earnings(message: types.Message):
-    user_id = message.from_user.id
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    
-    reports = load_reports()
-    total_earned = 0
-    total_delivered = 0
-    orders_count = 0
-
-    for r in reports:
-        if r.get("courier_id") == user_id and r.get("date", "").startswith(today_date):
-            total_earned += r.get("earnings", 0)
-            total_delivered += int(r.get("delivered", 0))
-            orders_count += 1
-
-    formatted_earnings = f"{total_earned:,}".replace(",", " ")
-
-    await message.answer(
-        f"📊 **Ваша статистика за сегодня ({today_date}):**\n\n"
-        f"📦 Успешных заказов: **{orders_count}**\n"
-        f"💧 Доставлено бутылей (19л): **{total_delivered} шт.**\n"
-        f"💵 **Заработано за сегодня:** `{formatted_earnings} сум`",
-        parse_mode="Markdown"
-    )
-
-
-# 📊 АДМИН-СТАТИСТИКА: Детальная информация по каждому курьеру
+# 3. Интерактивная Панель Админа (Выбор курьера)
 @dp.message(Command("stats"))
 @dp.message(F.text == "📊 Статистика админа")
-async def admin_full_stats(message: types.Message):
+async def admin_panel_select_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав администратора.")
+        return
+
+    reports = load_reports()
+    courier_map = {}
+
+    # Собираем список всех курьеров из историй отчетов
+    for r in reports:
+        cid = r.get("courier_id")
+        if cid:
+            cname = r.get("courier_name", "Курьер")
+            cuser = r.get("courier_username", "нет_юзернейма")
+            courier_map[cid] = f"{cname} (@{cuser})"
+
+    inline_keyboard = []
+    
+    # Кнопка для общей сводки по всей компании за сегодня
+    inline_keyboard.append([
+        InlineKeyboardButton(text="🏢 Общий сводный отчет (За сегодня)", callback_data="admin_stat_today_all")
+    ])
+
+    for cid, label in courier_map.items():
+        inline_keyboard.append([
+            InlineKeyboardButton(text=f"🚚 {label}", callback_data=f"sel_cour_{cid}")
+        ])
+
+    if not courier_map:
+        await message.answer("📭 В системе пока нет ни одного опубликованного отчета.")
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    await message.answer("👥 **Панель администратора:**\nВыберите курьера для просмотра статистики:", reply_markup=kb, parse_mode="Markdown")
+
+
+# Выбор периода для выбранного курьера
+@dp.callback_query(F.data.startswith("sel_cour_"))
+async def admin_select_period(callback: types.CallbackQuery):
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    courier_id = callback.data.split("_")[2]
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📅 За сегодня", callback_data=f"rep_{courier_id}_1"),
+                InlineKeyboardButton(text="📅 За неделю (7д)", callback_data=f"rep_{courier_id}_7")
+            ],
+            [
+                InlineKeyboardButton(text="📅 За 15 дней", callback_data=f"rep_{courier_id}_15"),
+                InlineKeyboardButton(text="📅 За месяц (30д)", callback_data=f"rep_{courier_id}_30")
+            ],
+            [
+                InlineKeyboardButton(text="📅 За всё время", callback_data=f"rep_{courier_id}_all")
+            ]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"👤 **Выбран курьер ID:** `{courier_id}`\n📅 Выберите период для расчета:",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+# Формирование отчета по курьеру за выбранный период
+@dp.callback_query(F.data.startswith("rep_"))
+async def admin_show_courier_report(callback: types.CallbackQuery):
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    parts = callback.data.split("_")
+    target_id = int(parts[1])
+    period = parts[2]
+
+    days_limit = int(period) if period.isdigit() else None
+    reports = load_reports()
+    now = datetime.now()
+
+    phys_deliv = 0
+    jur_deliv = 0
+    total_returned = 0
+    total_revenue = 0
+    total_earnings = 0
+    orders_count = 0
+    courier_name = "Курьер"
+    courier_username = "нет_юзернейма"
+
+    for r in reports:
+        if r.get("courier_id") == target_id:
+            r_date_str = r.get("date", "")
+            try:
+                r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+
+            if days_limit:
+                cutoff = now - timedelta(days=days_limit)
+                if r_date < cutoff:
+                    continue
+
+            courier_name = r.get("courier_name", courier_name)
+            courier_username = r.get("courier_username", courier_username)
+
+            deliv = int(r.get("delivered", 0))
+            ret = int(r.get("returned", 0))
+            ctype = r.get("client_type", "Физ. лицо")
+            rev = int(r.get("total_price", 0))
+            earn = int(r.get("earnings", 0))
+
+            if ctype == "Юр. лицо":
+                jur_deliv += deliv
+            else:
+                phys_deliv += deliv
+
+            total_returned += ret
+            total_revenue += rev
+            total_earnings += earn
+            orders_count += 1
+
+    period_titles = {
+        "1": "ЗА СЕГОДНЯ",
+        "7": "ЗА НЕДЕЛЮ (7 ДНЕЙ)",
+        "15": "ЗА 15 ДНЕЙ",
+        "30": "ЗА МЕСЯЦ (30 ДНЕЙ)",
+        "all": "ЗА ВСЁ ВРЕМЯ"
+    }
+    header_title = period_titles.get(period, "ЗА ПЕРИОД")
+
+    if orders_count == 0:
+        await callback.message.edit_text(
+            f"📭 У курьера **{courier_name}** (@{courier_username}) нет заказов {header_title.lower()}.",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    total_deliv = phys_deliv + jur_deliv
+    rev_fmt = f"{total_revenue:,}".replace(",", " ")
+    earn_fmt = f"{total_earnings:,}".replace(",", " ")
+
+    text = (
+        f"📊 **СТАТИСТИКА КУРЬЕРА {header_title}**\n\n"
+        f"🚚 **Курьер:** {courier_name} (@{courier_username})\n"
+        f"🆔 **ID:** `{target_id}`\n\n"
+        f"📦 Выполнено заказов: **{orders_count}**\n"
+        f"👤 Физ. лицам сдал: **{phys_deliv} шт.**\n"
+        f"🏢 Юр. лицам сдал: **{jur_deliv} шт.**\n"
+        f"💧 **Всего сдано полных:** **{total_deliv} шт.**\n"
+        f"🔄 **Всего собрано пустых:** **{total_returned} шт.**\n"
+        f"💰 Выручка компании: **{rev_fmt} сум**\n\n"
+        f"💵 **Итого заработок (Зарплата):** `{earn_fmt} сум`"
+    )
+
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await callback.answer()
+
+
+# Общий сводный отчет компании за сегодня
+@dp.callback_query(F.data == "admin_stat_today_all")
+async def admin_stat_today_all_handler(callback: types.CallbackQuery):
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Нет доступа", show_alert=True)
         return
 
     today_date = datetime.now().strftime("%Y-%m-%d")
     reports = load_reports()
 
-    # Собираем уникальных курьеров, сдавших отчеты за сегодня
     courier_stats = {}
 
     for r in reports:
@@ -533,10 +616,11 @@ async def admin_full_stats(message: types.Message):
             courier_stats[cid]["orders"] += 1
 
     if not courier_stats:
-        await message.answer(f"📭 За сегодня ({today_date}) отчетов от курьеров еще не поступало.")
+        await callback.message.edit_text(f"📭 За сегодня ({today_date}) отчетов еще не поступало.")
+        await callback.answer()
         return
 
-    text = f"📊 **ОТЧЕТ ПО КУРЬЕРАМ ЗА СЕГОДНЯ ({today_date}):**\n\n"
+    text = f"📊 **ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):**\n\n"
     
     grand_delivered = 0
     grand_returned = 0
@@ -554,13 +638,9 @@ async def admin_full_stats(message: types.Message):
         earn_fmt = f"{s['earnings']:,}".replace(",", " ")
 
         text += (
-            f"🚚 **Курьер:** {s['name']} (@{s['username']})\n"
-            f"📦 Заказов: **{s['orders']}** | Всего сдано: **{total_courier_deliv} шт.**\n"
-            f"  • 👤 Физ. лицам: **{s['phys_delivered']} шт.**\n"
-            f"  • 🏢 Юр. лицам: **{s['jur_delivered']} шт.**\n"
-            f"  • 🔄 Принял пустых: **{s['returned']} шт.**\n"
-            f"💰 Выручка с клиентов: **{rev_fmt} сум**\n"
-            f"💵 Заработок курьера: `{earn_fmt} сум`\n"
+            f"🚚 **{s['name']}** (@{s['username']})\n"
+            f"📦 Заказов: **{s['orders']}** | Сдано: **{total_courier_deliv} шт.** (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
+            f"🔄 Пустых: **{s['returned']} шт.** | Выручка: **{rev_fmt} сум** | ЗП: `{earn_fmt} сум`\n"
             f"───────────────────\n"
         )
 
@@ -568,14 +648,99 @@ async def admin_full_stats(message: types.Message):
     tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
 
     text += (
-        f"📊 **ОБЩИЙ ИТОГ ЗА ДЕНЬ:**\n"
+        f"📊 **ИТОГО ПО КОМПАНИИ:**\n"
         f"💧 Сдано всего полных: **{grand_delivered} шт.**\n"
         f"🔄 Собрано всего пустых: **{grand_returned} шт.**\n"
         f"💰 Общая выручка: **{tot_rev_fmt} сум**\n"
         f"💵 Всего курьерских: **{tot_earn_fmt} сум**"
     )
 
-    await message.answer(text, parse_mode="Markdown")
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await callback.answer()
+
+
+# 4. Основная логика бота
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    couriers = load_couriers()
+
+    if couriers and user_id not in couriers:
+        if not (ADMIN_IDS and user_id in ADMIN_IDS):
+            await message.answer(
+                f"⛔️ У вас нет доступа к системе отчетов.\nВаш Telegram ID: `{user_id}`", 
+                parse_mode="Markdown"
+            )
+            return
+
+    buttons = [
+        [KeyboardButton(text="💰 Мой заработок за сегодня")],
+        [KeyboardButton(text="📦 Открыть отчет / Hisobotni ochish")]
+    ]
+    
+    if not ADMIN_IDS or user_id in ADMIN_IDS:
+        buttons.insert(0, [KeyboardButton(text="📊 Статистика админа")])
+
+    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📦 Заполнить отчет (Mini App)",
+                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
+                )
+            ]
+        ]
+    )
+    
+    await message.answer(
+        "👋 Добро пожаловать!\nИспользуйте кнопку ниже для отправки отчета или меню для проверки статистики.", 
+        reply_markup=keyboard
+    )
+    await message.answer("Меню управления:", reply_markup=markup)
+
+
+@dp.message(F.text == "📦 Открыть отчет / Hisobotni ochish")
+async def open_report_btn(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📦 Заполнить отчет (Mini App)",
+                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
+                )
+            ]
+        ]
+    )
+    await message.answer("Нажмите на кнопку ниже, чтобы открыть форму отчета:", reply_markup=keyboard)
+
+
+@dp.message(F.text == "💰 Мой заработок за сегодня")
+async def check_today_earnings(message: types.Message):
+    user_id = message.from_user.id
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    
+    reports = load_reports()
+    total_earned = 0
+    total_delivered = 0
+    orders_count = 0
+
+    for r in reports:
+        if r.get("courier_id") == user_id and r.get("date", "").startswith(today_date):
+            total_earned += r.get("earnings", 0)
+            total_delivered += int(r.get("delivered", 0))
+            orders_count += 1
+
+    formatted_earnings = f"{total_earned:,}".replace(",", " ")
+
+    await message.answer(
+        f"📊 **Ваша статистика за сегодня ({today_date}):**\n\n"
+        f"📦 Успешных заказов: **{orders_count}**\n"
+        f"💧 Доставлено бутылей (19л): **{total_delivered} шт.**\n"
+        f"💵 **Заработано за сегодня:** `{formatted_earnings} сум`",
+        parse_mode="Markdown"
+    )
 
 
 @dp.message(F.web_app_data)
@@ -606,7 +771,7 @@ async def handle_web_app_data(message: types.Message):
         
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Сохраняем расширенный отчет в историю
+        # Сохранение отчета в базу
         report_record = {
             "date": current_datetime,
             "courier_id": sender_id,
@@ -648,7 +813,7 @@ async def handle_web_app_data(message: types.Message):
         await message.answer("❌ Произошла ошибка при сохранении отчета.")
 
 
-# 4. Запуск и приветствие при рестарте
+# 5. Запуск и приветствие при рестарте
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)

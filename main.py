@@ -44,14 +44,14 @@ def save_couriers(couriers):
         json.dump(couriers, f, ensure_ascii=False, indent=4)
 
 
-# HTML-страница Mini App
+# Многоязычная HTML-страница Mini App (Русский / O'zbekcha)
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Отчет курьера</title>
+    <title>Отчет курьера / Kuryer hisoboti</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
@@ -68,6 +68,16 @@ HTML_CONTENT = """
             padding: 20px;
             border-radius: 12px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        .lang-switcher {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 15px;
+        }
+        .lang-switcher select {
+            width: auto;
+            padding: 4px 8px;
+            font-size: 14px;
         }
         h2 {
             text-align: center;
@@ -117,38 +127,44 @@ HTML_CONTENT = """
 </head>
 <body>
     <div class="container">
-        <h2>💧 Отчет по доставке</h2>
+        <div class="lang-switcher">
+            <select id="langSelect">
+                <option value="uz">🇺🇿 O'zbekcha</option>
+                <option value="ru" selected>🇷🇺 Русский</option>
+            </select>
+        </div>
+        
+        <h2 id="t_title">💧 Отчет по доставке</h2>
         <form id="reportForm">
             <div class="form-group">
-                <label for="clientId">ID абонента / Фирма:</label>
+                <label id="t_clientId" for="clientId">ID абонента / Фирма:</label>
                 <input type="text" id="clientId" required placeholder="Введите ID или название">
             </div>
             <div class="form-group">
-                <label for="delivered">Сдал полных (19л):</label>
+                <label id="t_delivered" for="delivered">Сдал полных (19л):</label>
                 <input type="number" id="delivered" min="0" placeholder="0" required>
             </div>
             <div class="form-group">
-                <label for="returned">Принял пустых (19л):</label>
+                <label id="t_returned" for="returned">Принял пустых (19л):</label>
                 <input type="number" id="returned" min="0" placeholder="0" required>
             </div>
             <div class="form-group">
-                <label for="clientType">Тип клиента:</label>
+                <label id="t_clientType" for="clientType">Тип клиента:</label>
                 <select id="clientType">
-                    <option value="Юр. лицо">Юр. лицо</option>
-                    <option value="Физ. лицо">Физ. лицо</option>
+                    <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
+                    <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
                 </select>
             </div>
             <div class="form-group">
-                <label for="paymentType">Тип оплаты:</label>
+                <label id="t_paymentType" for="paymentType">Тип оплаты:</label>
                 <select id="paymentType">
-                    <option value="Наличные">Наличные</option>
-                    <option value="Перевод (Click/Payme)">Перевод</option>
-                    <option value="Терминал">Терминал</option>
-                    <option value="Долг">Долг</option>
+                    <option value="Наличные" id="opt_cash">Наличные</option>
+                    <option value="Click/Payme">Click/Payme</option>
+                    <option value="Перечисление" id="opt_bank">Перечисление</option>
                 </select>
             </div>
             <div class="form-group">
-                <label for="totalPrice">Сумма (сум):</label>
+                <label id="t_totalPrice" for="totalPrice">Сумма (сум):</label>
                 <input type="number" id="totalPrice" min="0" placeholder="0" required>
             </div>
             <button type="submit" id="submitBtn" disabled>Отправить отчет</button>
@@ -161,13 +177,78 @@ HTML_CONTENT = """
 
         const PRICE_PER_BOTTLE = 23000;
 
+        const translations = {
+            ru: {
+                title: "💧 Отчет по доставке",
+                clientId: "ID абонента / Фирма:",
+                clientIdPlaceholder: "Введите ID или название",
+                delivered: "Сдал полных (19л):",
+                returned: "Принял пустых (19л):",
+                clientType: "Тип клиента:",
+                jur: "Юр. лицо",
+                phys: "Физ. лицо",
+                paymentType: "Тип оплаты:",
+                cash: "Наличные",
+                bank: "Перечисление",
+                totalPrice: "Сумма (сум):",
+                submit: "Отправить отчет"
+            },
+            uz: {
+                title: "💧 Yetkazib berish hisoboti",
+                clientId: "Abonent ID / Firma:",
+                clientIdPlaceholder: "ID yoki nomini kiriting",
+                delivered: "To'liq topshirildi (19l):",
+                returned: "Bo'sh qabul qilindi (19l):",
+                clientType: "Mijoz turi:",
+                jur: "Yuridik shaxs",
+                phys: "Jismoniy shaxs",
+                paymentType: "To'lov turi:",
+                cash: "Naqd pul",
+                bank: "Pul o'tkazmasi",
+                totalPrice: "Summa (so'm):",
+                submit: "Hisobotni yuborish"
+            }
+        };
+
+        const langSelect = document.getElementById('langSelect');
+        const t_title = document.getElementById('t_title');
+        const t_clientId = document.getElementById('t_clientId');
         const clientIdInput = document.getElementById('clientId');
+        const t_delivered = document.getElementById('t_delivered');
+        const t_returned = document.getElementById('t_returned');
+        const t_clientType = document.getElementById('t_clientType');
+        const opt_jur = document.getElementById('opt_jur');
+        const opt_phys = document.getElementById('opt_phys');
+        const t_paymentType = document.getElementById('t_paymentType');
+        const opt_cash = document.getElementById('opt_cash');
+        const opt_bank = document.getElementById('opt_bank');
+        const t_totalPrice = document.getElementById('t_totalPrice');
         const deliveredInput = document.getElementById('delivered');
         const returnedInput = document.getElementById('returned');
         const totalPriceInput = document.getElementById('totalPrice');
         const submitBtn = document.getElementById('submitBtn');
 
-        // Проверка заполненности обязательных полей для активации кнопки
+        function setLanguage(lang) {
+            const t = translations[lang];
+            t_title.innerText = t.title;
+            t_clientId.innerText = t.clientId;
+            clientIdInput.placeholder = t.clientIdPlaceholder;
+            t_delivered.innerText = t.delivered;
+            t_returned.innerText = t.returned;
+            t_clientType.innerText = t.clientType;
+            opt_jur.innerText = t.jur;
+            opt_phys.innerText = t.phys;
+            t_paymentType.innerText = t.paymentType;
+            opt_cash.innerText = t.cash;
+            opt_bank.innerText = t.bank;
+            t_totalPrice.innerText = t.totalPrice;
+            submitBtn.innerText = t.submit;
+        }
+
+        langSelect.addEventListener('change', function() {
+            setLanguage(this.value);
+        });
+
         function validateForm() {
             const clientIdVal = clientIdInput.value.trim();
             const deliveredVal = deliveredInput.value.trim();
@@ -180,7 +261,6 @@ HTML_CONTENT = """
             }
         }
 
-        // Авторасчет суммы по 23 000 сум и проверка полей
         deliveredInput.addEventListener('input', function() {
             const count = parseInt(deliveredInput.value) || 0;
             totalPriceInput.value = count * PRICE_PER_BOTTLE;
@@ -309,13 +389,13 @@ async def cmd_start(message: types.Message):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📦 Открыть отчет курьера",
+                    text="📦 Открыть отчет курьера / Hisobotni ochish",
                     web_app=WebAppInfo(url=WEB_SERVER_HOST)
                 )
             ]
         ]
     )
-    await message.answer("Нажмите кнопку ниже для заполнения отчета:", reply_markup=keyboard)
+    await message.answer("Нажмите кнопку ниже для заполнения отчета / Hisobotni to'ldirish uchun pastdagi tugmani bosing:", reply_markup=keyboard)
 
 
 @dp.message(F.web_app_data)
@@ -364,7 +444,7 @@ async def handle_web_app_data(message: types.Message):
         await message.answer("❌ Произошла ошибка при сохранении отчета.")
 
 
-# 4. Запуск
+# 4. Запуск и приветствие при рестарте
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
@@ -373,6 +453,18 @@ async def main():
 
     await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
     logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
+
+    # Уведомление о рестарте в канал
+    if CHANNEL_ID:
+        try:
+            target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
+            await bot.send_message(
+                chat_id=target_chat, 
+                text="🟢 **Бот успешно перезапущен и готов к работе!**\nКурьеры могут отправлять отчеты.", 
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.error(f"Не удалось отправить уведомление о рестарте: {e}")
 
     runner = web.AppRunner(app)
     await runner.setup()

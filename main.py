@@ -414,7 +414,6 @@ async def admin_panel_select_courier(message: types.Message):
     reports = load_reports()
     courier_map = {}
 
-    # Собираем список всех курьеров из историй отчетов
     for r in reports:
         cid = r.get("courier_id")
         if cid:
@@ -424,7 +423,6 @@ async def admin_panel_select_courier(message: types.Message):
 
     inline_keyboard = []
     
-    # Кнопка для общей сводки по всей компании за сегодня
     inline_keyboard.append([
         InlineKeyboardButton(text="🏢 Общий сводный отчет (За сегодня)", callback_data="admin_stat_today_all")
     ])
@@ -442,7 +440,6 @@ async def admin_panel_select_courier(message: types.Message):
     await message.answer("👥 **Панель администратора:**\nВыберите курьера для просмотра статистики:", reply_markup=kb, parse_mode="Markdown")
 
 
-# Выбор периода для выбранного курьера
 @dp.callback_query(F.data.startswith("sel_cour_"))
 async def admin_select_period(callback: types.CallbackQuery):
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
@@ -475,7 +472,6 @@ async def admin_select_period(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# Формирование отчета по курьеру за выбранный период
 @dp.callback_query(F.data.startswith("rep_"))
 async def admin_show_courier_report(callback: types.CallbackQuery):
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
@@ -569,7 +565,6 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# Общий сводный отчет компании за сегодня
 @dp.callback_query(F.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
@@ -755,23 +750,21 @@ async def handle_web_app_data(message: types.Message):
                 await message.answer("❌ Ошибка безопасности: ваш ID не найден в списке курьеров.")
                 return
 
-        client_id = data.get("client_id")
+        client_id = str(data.get("client_id", "Не указан"))
         delivered = int(data.get("delivered", 0))
         returned = int(data.get("returned", 0))
-        client_type = data.get("client_type")
-        payment_type = data.get("payment_type")
+        client_type = str(data.get("client_type", "Физ. лицо"))
+        payment_type = str(data.get("payment_type", "Наличные"))
         total_price = int(data.get("total_price", 0))
         
-        courier_name = data.get("courier_name") or message.from_user.full_name
-        courier_username = data.get("courier_username") or message.from_user.username or 'нет_юзернейма'
+        courier_name = message.from_user.full_name
+        courier_username = message.from_user.username or 'нет_юзернейма'
         
-        # Расчет курьерского бонуса
         rate = BONUS_JURIDICAL if client_type == "Юр. лицо" else BONUS_PHYSICAL
         courier_earnings = delivered * rate
         
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Сохранение отчета в базу
         report_record = {
             "date": current_datetime,
             "courier_id": sender_id,
@@ -805,12 +798,15 @@ async def handle_web_app_data(message: types.Message):
         await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
 
         if CHANNEL_ID:
-            target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
-            await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
+            try:
+                target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
+                await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
+            except Exception as channel_err:
+                logging.error(f"Ошибка при отправке в канал CHANNEL_ID: {channel_err}")
 
     except Exception as e:
         logging.error(f"Ошибка обработки отчета: {e}")
-        await message.answer("❌ Произошла ошибка при сохранении отчета.")
+        await message.answer(f"❌ Произошла ошибка при сохранении отчета: {e}")
 
 
 # 5. Запуск и приветствие при рестарте
@@ -823,7 +819,6 @@ async def main():
     await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
     logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
 
-    # Уведомление о рестарте в канал
     if CHANNEL_ID:
         try:
             target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID

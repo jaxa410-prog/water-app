@@ -2,9 +2,10 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
-from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, Update
+from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, Update
 from aiohttp import web
 
 # Логирование
@@ -22,9 +23,14 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 COURIERS_FILE = "couriers.json"
+REPORTS_FILE = "reports.json"  # Хранение всех отчетов
 
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
+
+# Ставки заработка курьера за 1 бутыль/капсулу (в сумах)
+BONUS_PHYSICAL = 2000   # За физ. лицо
+BONUS_JURIDICAL = 3500  # За юр. лицо
 
 
 def load_couriers():
@@ -42,6 +48,25 @@ def save_couriers(couriers):
     """Сохранение списка курьеров в файл"""
     with open(COURIERS_FILE, "w", encoding="utf-8") as f:
         json.dump(couriers, f, ensure_ascii=False, indent=4)
+
+
+def load_reports():
+    """Загрузка истории отчетов"""
+    if os.path.exists(REPORTS_FILE):
+        try:
+            with open(REPORTS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def save_report_to_db(report_data):
+    """Сохранение отчета в общую базу"""
+    reports = load_reports()
+    reports.append(report_data)
+    with open(REPORTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(reports, f, ensure_ascii=False, indent=4)
 
 
 # Многоязычная HTML-страница Mini App (Русский / O'zbekcha)
@@ -151,8 +176,8 @@ HTML_CONTENT = """
             <div class="form-group">
                 <label id="t_clientType" for="clientType">Тип клиента:</label>
                 <select id="clientType">
-                    <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
                     <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
+                    <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
                 </select>
             </div>
             <div class="form-group">
@@ -385,17 +410,172 @@ async def cmd_start(message: types.Message):
             )
             return
 
+    # Формируем клавиатуру для администратора или курьера
+    buttons = [
+        [KeyboardButton(text="💰 Мой заработок за сегодня")],
+        [KeyboardButton(text="📦 Открыть отчет / Hisobotni ochish")]
+    ]
+    
+    # Добавляем кнопку администратора
+    if not ADMIN_IDS or user_id in ADMIN_IDS:
+        buttons.insert(0, [KeyboardButton(text="📊 Статистика админа")])
+
+    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📦 Открыть отчет курьера / Hisobotni ochish",
+                    text="📦 Заполнить отчет (Mini App)",
                     web_app=WebAppInfo(url=WEB_SERVER_HOST)
                 )
             ]
         ]
     )
-    await message.answer("Нажмите кнопку ниже для заполнения отчета / Hisobotni to'ldirish uchun pastdagi tugmani bosing:", reply_markup=keyboard)
+    
+    await message.answer(
+        "👋 Добро пожаловать!\nИспользуйте кнопку ниже для отправки отчета или меню для проверки статистики.", 
+        reply_markup=keyboard
+    )
+    await message.answer("Меню управления:", reply_markup=markup)
+
+
+# Обработка кнопки открытия отчета
+@dp.message(F.text == "📦 Открыть отчет / Hisobotni ochish")
+async def open_report_btn(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📦 Заполнить отчет (Mini App)",
+                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
+                )
+            ]
+        ]
+    )
+    await message.answer("Нажмите на кнопку ниже, чтобы открыть форму отчета:", reply_markup=keyboard)
+
+
+# Личная статистика курьера за сегодня
+@dp.message(F.text == "💰 Мой заработок за сегодня")
+async def check_today_earnings(message: types.Message):
+    user_id = message.from_user.id
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    
+    reports = load_reports()
+    total_earned = 0
+    total_delivered = 0
+    orders_count = 0
+
+    for r in reports:
+        if r.get("courier_id") == user_id and r.get("date", "").startswith(today_date):
+            total_earned += r.get("earnings", 0)
+            total_delivered += int(r.get("delivered", 0))
+            orders_count += 1
+
+    formatted_earnings = f"{total_earned:,}".replace(",", " ")
+
+    await message.answer(
+        f"📊 **Ваша статистика за сегодня ({today_date}):**\n\n"
+        f"📦 Успешных заказов: **{orders_count}**\n"
+        f"💧 Доставлено бутылей (19л): **{total_delivered} шт.**\n"
+        f"💵 **Заработано за сегодня:** `{formatted_earnings} сум`",
+        parse_mode="Markdown"
+    )
+
+
+# 📊 АДМИН-СТАТИСТИКА: Детальная информация по каждому курьеру
+@dp.message(Command("stats"))
+@dp.message(F.text == "📊 Статистика админа")
+async def admin_full_stats(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    reports = load_reports()
+
+    # Собираем уникальных курьеров, сдавших отчеты за сегодня
+    courier_stats = {}
+
+    for r in reports:
+        if r.get("date", "").startswith(today_date):
+            cid = r.get("courier_id")
+            cname = r.get("courier_name", "Курьер")
+            cuser = r.get("courier_username", "нет_юзернейма")
+
+            if cid not in courier_stats:
+                courier_stats[cid] = {
+                    "name": cname,
+                    "username": cuser,
+                    "phys_delivered": 0,
+                    "jur_delivered": 0,
+                    "returned": 0,
+                    "revenue": 0,
+                    "earnings": 0,
+                    "orders": 0
+                }
+
+            deliv = int(r.get("delivered", 0))
+            ret = int(r.get("returned", 0))
+            ctype = r.get("client_type", "Физ. лицо")
+            rev = int(r.get("total_price", 0))
+            earn = int(r.get("earnings", 0))
+
+            if ctype == "Юр. лицо":
+                courier_stats[cid]["jur_delivered"] += deliv
+            else:
+                courier_stats[cid]["phys_delivered"] += deliv
+
+            courier_stats[cid]["returned"] += ret
+            courier_stats[cid]["revenue"] += rev
+            courier_stats[cid]["earnings"] += earn
+            courier_stats[cid]["orders"] += 1
+
+    if not courier_stats:
+        await message.answer(f"📭 За сегодня ({today_date}) отчетов от курьеров еще не поступало.")
+        return
+
+    text = f"📊 **ОТЧЕТ ПО КУРЬЕРАМ ЗА СЕГОДНЯ ({today_date}):**\n\n"
+    
+    grand_delivered = 0
+    grand_returned = 0
+    grand_revenue = 0
+    grand_earnings = 0
+
+    for cid, s in courier_stats.items():
+        total_courier_deliv = s["phys_delivered"] + s["jur_delivered"]
+        grand_delivered += total_courier_deliv
+        grand_returned += s["returned"]
+        grand_revenue += s["revenue"]
+        grand_earnings += s["earnings"]
+
+        rev_fmt = f"{s['revenue']:,}".replace(",", " ")
+        earn_fmt = f"{s['earnings']:,}".replace(",", " ")
+
+        text += (
+            f"🚚 **Курьер:** {s['name']} (@{s['username']})\n"
+            f"📦 Заказов: **{s['orders']}** | Всего сдано: **{total_courier_deliv} шт.**\n"
+            f"  • 👤 Физ. лицам: **{s['phys_delivered']} шт.**\n"
+            f"  • 🏢 Юр. лицам: **{s['jur_delivered']} шт.**\n"
+            f"  • 🔄 Принял пустых: **{s['returned']} шт.**\n"
+            f"💰 Выручка с клиентов: **{rev_fmt} сум**\n"
+            f"💵 Заработок курьера: `{earn_fmt} сум`\n"
+            f"───────────────────\n"
+        )
+
+    tot_rev_fmt = f"{grand_revenue:,}".replace(",", " ")
+    tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
+
+    text += (
+        f"📊 **ОБЩИЙ ИТОГ ЗА ДЕНЬ:**\n"
+        f"💧 Сдано всего полных: **{grand_delivered} шт.**\n"
+        f"🔄 Собрано всего пустых: **{grand_returned} шт.**\n"
+        f"💰 Общая выручка: **{tot_rev_fmt} сум**\n"
+        f"💵 Всего курьерских: **{tot_earn_fmt} сум**"
+    )
+
+    await message.answer(text, parse_mode="Markdown")
 
 
 @dp.message(F.web_app_data)
@@ -411,8 +591,8 @@ async def handle_web_app_data(message: types.Message):
                 return
 
         client_id = data.get("client_id")
-        delivered = data.get("delivered")
-        returned = data.get("returned")
+        delivered = int(data.get("delivered", 0))
+        returned = int(data.get("returned", 0))
         client_type = data.get("client_type")
         payment_type = data.get("payment_type")
         total_price = int(data.get("total_price", 0))
@@ -420,7 +600,30 @@ async def handle_web_app_data(message: types.Message):
         courier_name = data.get("courier_name") or message.from_user.full_name
         courier_username = data.get("courier_username") or message.from_user.username or 'нет_юзернейма'
         
+        # Расчет курьерского бонуса
+        rate = BONUS_JURIDICAL if client_type == "Юр. лицо" else BONUS_PHYSICAL
+        courier_earnings = delivered * rate
+        
+        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Сохраняем расширенный отчет в историю
+        report_record = {
+            "date": current_datetime,
+            "courier_id": sender_id,
+            "courier_name": courier_name,
+            "courier_username": courier_username,
+            "client_id": client_id,
+            "delivered": delivered,
+            "returned": returned,
+            "client_type": client_type,
+            "payment_type": payment_type,
+            "total_price": total_price,
+            "earnings": courier_earnings
+        }
+        save_report_to_db(report_record)
+
         formatted_price = f"{total_price:,}".replace(",", " ")
+        formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
         
         report_text = (
             f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
@@ -430,7 +633,8 @@ async def handle_web_app_data(message: types.Message):
             f"🔄 **Принял пустых (19л):** {returned} шт.\n"
             f"👥 **Тип клиента:** {client_type}\n"
             f"💳 **Тип оплаты:** {payment_type}\n"
-            f"💰 **Сумма:** {formatted_price} сум"
+            f"💰 **Сумма заказа:** {formatted_price} сум\n"
+            f"💵 **Заработок курьера:** `{formatted_earnings} сум` ({rate:,} сум/шт)"
         )
 
         await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")

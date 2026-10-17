@@ -182,14 +182,14 @@ def save_report_to_db_with_balance(data):
         return False, str(e)
 
 
-# HTML Mini App с поддержкой маршрутов и выбора задач
+# HTML Mini App с отображением маршрута на сегодня
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Отчет курьера / Kuryer hisoboti</title>
+    <title>Маршрут курьера / Kuryer marshruti</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
@@ -200,222 +200,209 @@ HTML_CONTENT = """
             padding: 16px;
         }
         .container {
-            max-width: 400px;
+            max-width: 420px;
             margin: 0 auto;
-            background: var(--tg-theme-secondary-bg-color, #ffffff);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        }
-        .lang-switcher {
-            display: flex;
-            justify-content: flex-end;
-            margin-bottom: 15px;
-        }
-        .lang-switcher select {
-            width: auto;
-            padding: 4px 8px;
-            font-size: 14px;
         }
         h2 {
             text-align: center;
             font-size: 20px;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
-        .form-group {
-            margin-bottom: 14px;
+        .task-card {
+            background: var(--tg-theme-secondary-bg-color, #ffffff);
+            padding: 14px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            border-left: 5px solid #2481cc;
+            cursor: pointer;
         }
-        label {
-            display: block;
-            font-size: 14px;
-            margin-bottom: 6px;
-            font-weight: 500;
+        .task-card.completed {
+            border-left-color: #16a34a;
+            opacity: 0.6;
         }
-        input, select {
-            width: 100%;
-            padding: 10px 12px;
-            box-sizing: border-box;
-            border: 1px solid #ccc;
-            border-radius: 8px;
+        .client-name {
+            font-weight: 600;
             font-size: 16px;
+            margin-bottom: 4px;
+        }
+        .client-info {
+            font-size: 13px;
+            color: #6b7280;
+            margin-bottom: 2px;
+        }
+        .task-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 4px;
+            margin-top: 6px;
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+        #formModal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        .modal-content {
             background: var(--tg-theme-bg-color, #fff);
+            padding: 20px;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 380px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .form-group { margin-bottom: 12px; }
+        label { display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500; }
+        input, select {
+            width: 100%; padding: 10px; box-sizing: border-box;
+            border: 1px solid #ccc; border-radius: 8px; font-size: 15px;
+            background: var(--tg-theme-secondary-bg-color, #fff);
             color: var(--tg-theme-text-color, #000);
         }
         button {
-            width: 100%;
-            background-color: var(--tg-theme-button-color, #2481cc);
-            color: var(--tg-theme-button-text-color, #fff);
-            border: none;
-            padding: 14px;
-            font-size: 16px;
-            font-weight: 600;
-            border-radius: 8px;
-            cursor: pointer;
-            margin-top: 10px;
+            width: 100%; background-color: var(--tg-theme-button-color, #2481cc);
+            color: var(--tg-theme-button-text-color, #fff); border: none;
+            padding: 12px; font-size: 15px; font-weight: 600; border-radius: 8px;
+            cursor: pointer; margin-top: 10px;
         }
-        button:disabled {
-            background-color: #d1d5db;
-            color: #9ca3af;
-            cursor: not-allowed;
-        }
+        .close-btn { background-color: #6b7280; margin-top: 6px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="lang-switcher">
-            <select id="langSelect">
-                <option value="uz">🇺🇿 O'zbekcha</option>
-                <option value="ru" selected>🇷🇺 Русский</option>
-            </select>
+        <h2>📍 Ваш маршрут на сегодня</h2>
+        <div id="routeList">Загрузка маршрута...</div>
+    </div>
+
+    <!-- Модальное окно заполнения отчета по точке -->
+    <div id="formModal">
+        <div class="modal-content">
+            <h3 id="modalTitle" style="margin-top:0; font-size:18px;">Сдача точки</h3>
+            <form id="reportForm">
+                <input type="hidden" id="modalClientId">
+                <input type="hidden" id="modalTaskType">
+                <div class="form-group">
+                    <label id="lblDelivered">Сдал полных (19л):</label>
+                    <input type="number" id="delivered" min="0" required>
+                </div>
+                <div class="form-group">
+                    <label id="lblReturned">Принял пустых (19л):</label>
+                    <input type="number" id="returned" min="0" required>
+                </div>
+                <div class="form-group">
+                    <label>Тип оплаты:</label>
+                    <select id="paymentType">
+                        <option value="Наличные">Наличные</option>
+                        <option value="Click/Payme">Click/Payme</option>
+                        <option value="Перечисление">Перечисление</option>
+                        <option value="Предоплата">Предоплата</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Сумма (сум):</label>
+                    <input type="number" id="totalPrice" min="0" required>
+                </div>
+                <button type="submit" id="submitBtn">Сохранить отчёт</button>
+                <button type="button" class="close-btn" onclick="closeModal()">Отмена</button>
+            </form>
         </div>
-        
-        <h2 id="t_title">💧 Отчет по доставке</h2>
-        <form id="reportForm">
-            <div class="form-group">
-                <label id="t_clientId" for="clientId">ID абонента / Фирма:</label>
-                <input type="text" id="clientId" required placeholder="Введите ID или название">
-            </div>
-            <div class="form-group">
-                <label id="t_delivered" for="delivered">Сдал полных (19л):</label>
-                <input type="number" id="delivered" min="0" placeholder="0" required>
-            </div>
-            <div class="form-group">
-                <label id="t_returned" for="returned">Принял пустых (19л):</label>
-                <input type="number" id="returned" min="0" placeholder="0" required>
-            </div>
-            <div class="form-group">
-                <label id="t_clientType" for="clientType">Тип клиента:</label>
-                <select id="clientType">
-                    <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
-                    <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label id="t_paymentType" for="paymentType">Тип оплаты:</label>
-                <select id="paymentType">
-                    <option value="Наличные" id="opt_cash">Наличные</option>
-                    <option value="Click/Payme">Click/Payme</option>
-                    <option value="Перечисление" id="opt_bank">Перечисление</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label id="t_totalPrice" for="totalPrice">Сумма (сум):</label>
-                <input type="number" id="totalPrice" min="0" placeholder="0" required>
-            </div>
-            <button type="submit" id="submitBtn" disabled>Отправить отчет</button>
-        </form>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
         const PRICE_PER_BOTTLE = 23000;
+        const tgUser = tg.initDataUnsafe?.user;
+        const courierId = tgUser ? tgUser.id : null;
 
-        const translations = {
-            ru: {
-                title: "💧 Отчет по доставке",
-                clientId: "ID абонента / Фирма:",
-                clientIdPlaceholder: "Введите ID или название",
-                delivered: "Сдал полных (19л):",
-                returned: "Принял пустых (19л):",
-                clientType: "Тип клиента:",
-                jur: "Юр. лицо",
-                phys: "Физ. лицо",
-                paymentType: "Тип оплаты:",
-                cash: "Наличные",
-                bank: "Перечисление",
-                totalPrice: "Сумма (сум):",
-                submit: "Отправить отчет"
-            },
-            uz: {
-                title: "💧 Yetkazib berish hisoboti",
-                clientId: "Abonent ID / Firma:",
-                clientIdPlaceholder: "ID yoki nomini kiriting",
-                delivered: "To'liq topshirildi (19l):",
-                returned: "Bo'sh qabul qilindi (19l):",
-                clientType: "Mijoz turi:",
-                jur: "Yuridik shaxs",
-                phys: "Jismoniy shaxs",
-                paymentType: "To'lov turi:",
-                cash: "Naqd pul",
-                bank: "Pul o'tkazmasi",
-                totalPrice: "Summa (so'm):",
-                submit: "Hisobotni yuborish"
+        async function loadRoute() {
+            const listDiv = document.getElementById('routeList');
+            if (!courierId) {
+                listDiv.innerHTML = "⚠️ Не удалось определить ID курьера.";
+                return;
             }
-        };
 
-        const langSelect = document.getElementById('langSelect');
-        const t_title = document.getElementById('t_title');
-        const t_clientId = document.getElementById('t_clientId');
-        const clientIdInput = document.getElementById('clientId');
-        const t_delivered = document.getElementById('t_delivered');
-        const t_returned = document.getElementById('t_returned');
-        const t_clientType = document.getElementById('t_clientType');
-        const opt_jur = document.getElementById('opt_jur');
-        const opt_phys = document.getElementById('opt_phys');
-        const t_paymentType = document.getElementById('t_paymentType');
-        const opt_cash = document.getElementById('opt_cash');
-        const opt_bank = document.getElementById('opt_bank');
-        const t_totalPrice = document.getElementById('t_totalPrice');
-        const deliveredInput = document.getElementById('delivered');
-        const returnedInput = document.getElementById('returned');
-        const totalPriceInput = document.getElementById('totalPrice');
-        const submitBtn = document.getElementById('submitBtn');
+            try {
+                const response = await fetch(`/api/route?courier_id=${courierId}`);
+                const routes = await response.json();
 
-        langSelect.addEventListener('change', function() {
-            setLanguage(this.value);
-        });
+                if (!routes || routes.length === 0) {
+                    listDiv.innerHTML = "📭 На сегодня активных задач в маршруте нет.";
+                    return;
+                }
 
-        function setLanguage(lang) {
-            const t = translations[lang];
-            t_title.innerText = t.title;
-            t_clientId.innerText = t.clientId;
-            clientIdInput.placeholder = t.clientIdPlaceholder;
-            t_delivered.innerText = t.delivered;
-            t_returned.innerText = t.returned;
-            t_clientType.innerText = t.clientType;
-            opt_jur.innerText = t.jur;
-            opt_phys.innerText = t.phys;
-            t_paymentType.innerText = t.paymentType;
-            opt_cash.innerText = t.cash;
-            opt_bank.innerText = t.bank;
-            t_totalPrice.innerText = t.totalPrice;
-            submitBtn.innerText = t.submit;
-        }
+                listDiv.innerHTML = "";
+                routes.forEach(task => {
+                    const card = document.createElement('div');
+                    card.className = `task-card ${task.status === 'completed' ? 'completed' : ''}`;
+                    
+                    let taskTypeText = "🚚 Доставка";
+                    if (task.task_type === 'termination') taskTypeText = "🔄 Расторжение";
+                    if (task.task_type === 'service') taskTypeText = "🧼 Чистка кулера";
 
-        function validateForm() {
-            if (clientIdInput.value.trim() !== "" && deliveredInput.value.trim() !== "" && returnedInput.value.trim() !== "") {
-                submitBtn.removeAttribute('disabled');
-            } else {
-                submitBtn.setAttribute('disabled', 'true');
+                    card.innerHTML = `
+                        <div class="client-name">${task.client_name || 'Клиент #' + task.client_id}</div>
+                        <div class="client-info">📍 ${task.address || 'Адрес не указан'}</div>
+                        <div class="client-info">📞 ${task.phone || 'Нет телефона'}</div>
+                        <div class="client-info"><b>План:</b> ${task.planned_delivered} шт. водички</div>
+                        <span class="task-badge">${taskTypeText}</span>
+                    `;
+
+                    if (task.status !== 'completed') {
+                        card.onclick = () => openModal(task);
+                    }
+                    listDiv.appendChild(card);
+                });
+            } catch (e) {
+                listDiv.innerHTML = "⚠️ Ошибка загрузки маршрута с сервера.";
             }
         }
 
-        deliveredInput.addEventListener('input', function() {
-            const count = parseInt(deliveredInput.value) || 0;
-            totalPriceInput.value = count * PRICE_PER_BOTTLE;
-            validateForm();
-        });
+        function openModal(task) {
+            document.getElementById('modalClientId').value = task.client_id;
+            document.getElementById('modalTaskType').value = task.task_type || 'delivery';
+            document.getElementById('modalTitle').innerText = `Клиент: ${task.client_name || task.client_id}`;
+            document.getElementById('delivered').value = task.planned_delivered || 0;
+            document.getElementById('returned').value = 0;
+            document.getElementById('totalPrice').value = (task.planned_delivered || 0) * PRICE_PER_BOTTLE;
+            document.getElementById('formModal').style.display = 'flex';
+        }
 
-        clientIdInput.addEventListener('input', validateForm);
-        returnedInput.addEventListener('input', validateForm);
+        function closeModal() {
+            document.getElementById('formModal').style.display = 'none';
+        }
+
+        document.getElementById('delivered').addEventListener('input', function() {
+            const count = parseInt(this.value) || 0;
+            document.getElementById('totalPrice').value = count * PRICE_PER_BOTTLE;
+        });
 
         document.getElementById('reportForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+            const submitBtn = document.getElementById('submitBtn');
             submitBtn.disabled = true;
-            submitBtn.innerText = "Отправка...";
+            submitBtn.innerText = "Сохранение...";
 
-            const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
             const data = {
-                user_id: tgUser ? tgUser.id : null,
+                user_id: courierId,
                 user_name: tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : "Курьер",
                 username: tgUser ? (tgUser.username || "нет_юзернейма") : "нет_юзернейма",
-                client_id: clientIdInput.value,
-                delivered: deliveredInput.value,
-                returned: returnedInput.value,
-                client_type: document.getElementById('clientType').value,
+                client_id: document.getElementById('modalClientId').value,
+                task_type: document.getElementById('modalTaskType').value,
+                delivered: document.getElementById('delivered').value,
+                returned: document.getElementById('returned').value,
                 payment_type: document.getElementById('paymentType').value,
-                total_price: totalPriceInput.value
+                total_price: document.getElementById('totalPrice').value,
+                client_type: "Физ. лицо"
             };
 
             try {
@@ -425,19 +412,22 @@ HTML_CONTENT = """
                     body: JSON.stringify(data)
                 });
                 const resData = await response.json();
+                
                 if (response.ok && resData.status === "ok") {
-                    tg.close();
+                    closeModal();
+                    loadRoute();
                 } else {
-                    alert("Ошибка отправки: " + (resData.message || "Попробуйте снова"));
-                    submitBtn.disabled = false;
-                    submitBtn.innerText = "Отправить отчет";
+                    alert("Ошибка: " + (resData.message || "Попробуйте снова"));
                 }
             } catch (err) {
                 alert("Ошибка соединения с сервером.");
+            } finally {
                 submitBtn.disabled = false;
-                submitBtn.innerText = "Отправить отчет";
+                submitBtn.innerText = "Сохранить отчёт";
             }
         });
+
+        loadRoute();
     </script>
 </body>
 </html>
@@ -480,6 +470,7 @@ async def handle_api_report(request):
         client_type = str(data.get("client_type", "Физ. лицо"))
         payment_type = str(data.get("payment_type", "Наличные"))
         total_price = int(data.get("total_price", 0))
+        task_type = str(data.get("task_type", "delivery"))
         
         raw_name = str(data.get("user_name", "Курьер"))
         raw_username = str(data.get("username", "нет_юзернейма"))
@@ -499,10 +490,11 @@ async def handle_api_report(request):
             "client_type": client_type,
             "payment_type": payment_type,
             "total_price": total_price,
-            "earnings": courier_earnings
+            "earnings": courier_earnings,
+            "task_type": task_type
         }
 
-        # Вызываем функцию сохранения с проверкой баланса тары
+        # Сохранение с проверкой лимитов возврата тары
         success, result_msg = save_report_to_db_with_balance(report_record)
         if not success:
             return web.json_response({"status": "error", "message": result_msg}, status=400)
@@ -512,7 +504,7 @@ async def handle_api_report(request):
         formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
         
         report_text = (
-            f"📋 ОТЧЕТ О ДОСТАВКЕ (19л)\n\n"
+            f"📋 ОТЧЕТ О ДОСТАВКЕ ({task_type.upper()})\n\n"
             f"👤 Курьер: {raw_name} (@{raw_username})\n"
             f"🆔 ID / Фирма: {client_id}\n"
             f"💧 Сдал полных (19л): {delivered} шт.\n"
@@ -546,7 +538,7 @@ async def api_get_route(request):
     """API эндпоинт для Mini App: возвращает маршрут курьера на сегодня"""
     courier_id = request.rel_url.query.get("courier_id")
     if not courier_id:
-        return web.json_response({"error": "No courier_id provided"}, status=400)
+        return web.json_response([], status=400)
     routes = get_courier_route(int(courier_id))
     return web.json_response(routes)
 
@@ -634,7 +626,7 @@ async def send_summary_report(target_message: types.Message):
         logging.error(f"Ошибка сводки: {e}", exc_info=True)
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ОТЧЕТ ПО КУРЬЕРУ ЗА ВЫБРАННЫЙ ПЕРИОД (ИТОГОВЫЙ)
+# ОТЧЕТ ПО КУРЬЕРУ ЗА ВЫБРАННЫЙ ПЕРИОД
 async def send_single_courier_period_report(target_message: types.Message, target_id: str, days: int = 1):
     try:
         now = datetime.now(UZ_TIMEZONE)
@@ -801,10 +793,10 @@ async def cmd_start(message: types.Message):
         web_app_url = f"{WEB_SERVER_HOST}/"
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="📱 Открыть Mini App", web_app=WebAppInfo(url=web_app_url))]
+                [InlineKeyboardButton(text="📱 Открыть маршрут", web_app=WebAppInfo(url=web_app_url))]
             ]
         )
-        await message.answer("👋 Здравствуйте! Нажмите кнопку ниже, чтобы открыть Mini App и отправить отчёт.", reply_markup=keyboard)
+        await message.answer("👋 Здравствуйте! Нажмите кнопку ниже, чтобы открыть ваш ежедневный маршрут и отправить отчёт.", reply_markup=keyboard)
 
 @dp.message(F.text == "📊 Сводка за сегодня")
 async def cmd_summary(message: types.Message):
@@ -949,7 +941,7 @@ async def main():
     app.router.add_get("/health", handle_health)
     app.router.add_get("/api/route", api_get_route)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    app.router.add_post("/api/report", handle_api_report)
+    app.router.add_post("/api/report", api_post_report)
 
     dp.startup.register(on_startup)
 

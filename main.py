@@ -29,8 +29,10 @@ WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-COURIERS_FILE = "couriers.json"
-REPORTS_FILE = "reports.json"
+# Абсолютные пути для стабильной работы файлов на Render
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+COURIERS_FILE = os.path.join(BASE_DIR, "couriers.json")
+REPORTS_FILE = os.path.join(BASE_DIR, "reports.json")
 
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
@@ -59,8 +61,11 @@ def load_reports():
     if os.path.exists(REPORTS_FILE):
         try:
             with open(REPORTS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception as e:
+            logging.error(f"Ошибка чтения reports.json: {e}")
             return []
     return []
 
@@ -68,8 +73,12 @@ def load_reports():
 def save_report_to_db(report_data):
     reports = load_reports()
     reports.append(report_data)
-    with open(REPORTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(reports, f, ensure_ascii=False, indent=4)
+    try:
+        with open(REPORTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(reports, f, ensure_ascii=False, indent=4)
+        logging.info(f"Отчет успешно сохранен. Всего записей в базе: {len(reports)}")
+    except Exception as e:
+        logging.error(f"Ошибка записи в reports.json: {e}")
 
 
 # HTML Mini App
@@ -385,7 +394,7 @@ async def handle_api_report(request):
         raw_name = str(data.get("user_name", "Курьер"))
         raw_username = str(data.get("username", "нет_юзернейма"))
         
-        rate = BONUS_JURIDICAL if client_type == "Юр. лицо" else BONUS_PHYSICAL
+        rate = BONUS_JURIDICAL if "Юр" in client_type else BONUS_PHYSICAL
         courier_earnings = delivered * rate
         
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -536,7 +545,7 @@ async def admin_panel_select_courier(message: types.Message):
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-    await message.answer("👥 **Панель администратора:**\nВыберите курьера для просмотра статистики:", reply_markup=kb, parse_mode="Markdown")
+    await message.answer("👥 Панель администратора:\nВыберите курьера для просмотра статистики:", reply_markup=kb)
 
 
 @dp.callback_query(F.data.startswith("sel_cour_"))
@@ -613,7 +622,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
 
             deliv = int(r.get("delivered", 0))
             ret = int(r.get("returned", 0))
-            ctype = r.get("client_type", "Физ. лицо")
+            ctype = str(r.get("client_type", "Физ. лицо"))
             rev = int(r.get("total_price", 0))
             earn = int(r.get("earnings", 0))
 
@@ -662,96 +671,99 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     await callback.message.edit_text(text)
 
 
+# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (ЗАЩИЩЕННЫЙ ОБРАБОТЧИК)
 @dp.callback_query(F.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
-    await callback.answer()
+    await callback.answer("Загрузка сводки...")
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
         await callback.message.answer("❌ Нет доступа")
         return
 
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    reports = load_reports()
-    courier_stats = {}
+    try:
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        reports = load_reports()
+        courier_stats = {}
 
-    for r in reports:
-        r_date = str(r.get("date", ""))
-        if today_date in r_date:
-            cid = str(r.get("courier_id", "неизвестно"))
-            cname = str(r.get("courier_name", "Курьер"))
-            cuser = str(r.get("courier_username", "нет_юзернейма"))
-
-            if cid not in courier_stats:
-                courier_stats[cid] = {
-                    "name": cname,
-                    "username": cuser,
-                    "phys_delivered": 0,
-                    "jur_delivered": 0,
-                    "returned": 0,
-                    "revenue": 0,
-                    "earnings": 0,
-                    "orders": 0
-                }
-
-            try:
-                deliv = int(r.get("delivered", 0))
-                ret = int(r.get("returned", 0))
-                rev = int(r.get("total_price", 0))
-                earn = int(r.get("earnings", 0))
-            except (ValueError, TypeError):
+        for r in reports:
+            if not isinstance(r, dict):
                 continue
+            r_date = str(r.get("date", ""))
+            if today_date in r_date:
+                cid = str(r.get("courier_id", "неизвестно"))
+                cname = str(r.get("courier_name", "Курьер"))
+                cuser = str(r.get("courier_username", "нет_юзернейма"))
 
-            ctype = str(r.get("client_type", "Физ. лицо"))
+                if cid not in courier_stats:
+                    courier_stats[cid] = {
+                        "name": cname,
+                        "username": cuser,
+                        "phys_delivered": 0,
+                        "jur_delivered": 0,
+                        "returned": 0,
+                        "revenue": 0,
+                        "earnings": 0,
+                        "orders": 0
+                    }
 
-            if "Юр" in ctype:
-                courier_stats[cid]["jur_delivered"] += deliv
-            else:
-                courier_stats[cid]["phys_delivered"] += deliv
+                deliv = int(r.get("delivered", 0) or 0)
+                ret = int(r.get("returned", 0) or 0)
+                rev = int(r.get("total_price", 0) or 0)
+                earn = int(r.get("earnings", 0) or 0)
+                ctype = str(r.get("client_type", "Физ. лицо"))
 
-            courier_stats[cid]["returned"] += ret
-            courier_stats[cid]["revenue"] += rev
-            courier_stats[cid]["earnings"] += earn
-            courier_stats[cid]["orders"] += 1
+                if "Юр" in ctype:
+                    courier_stats[cid]["jur_delivered"] += deliv
+                else:
+                    courier_stats[cid]["phys_delivered"] += deliv
 
-    if not courier_stats:
-        await callback.message.edit_text(f"📭 За сегодня ({today_date}) отчетов еще не поступало.")
-        return
+                courier_stats[cid]["returned"] += ret
+                courier_stats[cid]["revenue"] += rev
+                courier_stats[cid]["earnings"] += earn
+                courier_stats[cid]["orders"] += 1
 
-    text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
-    
-    grand_delivered = 0
-    grand_returned = 0
-    grand_revenue = 0
-    grand_earnings = 0
+        if not courier_stats:
+            await callback.message.edit_text(f"📭 За сегодня ({today_date}) отчетов еще не поступало.")
+            return
 
-    for cid, s in courier_stats.items():
-        total_courier_deliv = s["phys_delivered"] + s["jur_delivered"]
-        grand_delivered += total_courier_deliv
-        grand_returned += s["returned"]
-        grand_revenue += s["revenue"]
-        grand_earnings += s["earnings"]
+        text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
+        
+        grand_delivered = 0
+        grand_returned = 0
+        grand_revenue = 0
+        grand_earnings = 0
 
-        rev_fmt = f"{s['revenue']:,}".replace(",", " ")
-        earn_fmt = f"{s['earnings']:,}".replace(",", " ")
+        for cid, s in courier_stats.items():
+            total_courier_deliv = s["phys_delivered"] + s["jur_delivered"]
+            grand_delivered += total_courier_deliv
+            grand_returned += s["returned"]
+            grand_revenue += s["revenue"]
+            grand_earnings += s["earnings"]
+
+            rev_fmt = f"{s['revenue']:,}".replace(",", " ")
+            earn_fmt = f"{s['earnings']:,}".replace(",", " ")
+
+            text += (
+                f"🚚 {s['name']} (@{s['username']})\n"
+                f"📦 Заказов: {s['orders']} | Сдано: {total_courier_deliv} шт. (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
+                f"🔄 Пустых: {s['returned']} шт. | Выручка: {rev_fmt} сум | ЗП: {earn_fmt} сум\n"
+                f"───────────────────\n"
+            )
+
+        tot_rev_fmt = f"{grand_revenue:,}".replace(",", " ")
+        tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
 
         text += (
-            f"🚚 {s['name']} (@{s['username']})\n"
-            f"📦 Заказов: {s['orders']} | Сдано: {total_courier_deliv} шт. (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
-            f"🔄 Пустых: {s['returned']} шт. | Выручка: {rev_fmt} сум | ЗП: {earn_fmt} сум\n"
-            f"───────────────────\n"
+            f"📊 ИТОГО ПО КОМПАНИИ:\n"
+            f"💧 Сдано всего полных: {grand_delivered} шт.\n"
+            f"🔄 Собрано всего пустых: {grand_returned} шт.\n"
+            f"💰 Общая выручка: {tot_rev_fmt} сум\n"
+            f"💵 Всего курьерских: {tot_earn_fmt} сум"
         )
 
-    tot_rev_fmt = f"{grand_revenue:,}".replace(",", " ")
-    tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
-
-    text += (
-        f"📊 ИТОГО ПО КОМПАНИИ:\n"
-        f"💧 Сдано всего полных: {grand_delivered} шт.\n"
-        f"🔄 Собрано всего пустых: {grand_returned} шт.\n"
-        f"💰 Общая выручка: {tot_rev_fmt} сум\n"
-        f"💵 Всего курьерских: {tot_earn_fmt} сум"
-    )
-
-    await callback.message.edit_text(text)
+        await callback.message.edit_text(text)
+    except Exception as e:
+        logging.error(f"Ошибка в общем сводном отчете: {e}", exc_info=True)
+        await callback.message.edit_text(f"⚠️ Ошибка формирования отчета: {e}")
 
 
 # 4. Основная логика бота
@@ -824,8 +836,8 @@ async def check_today_earnings(message: types.Message):
     for r in reports:
         r_cid = str(r.get("courier_id", ""))
         if r_cid == str(user_id) and str(r.get("date", "")).startswith(today_date):
-            total_earned += int(r.get("earnings", 0))
-            total_delivered += int(r.get("delivered", 0))
+            total_earned += int(r.get("earnings", 0) or 0)
+            total_delivered += int(r.get("delivered", 0) or 0)
             orders_count += 1
 
     formatted_earnings = f"{total_earned:,}".replace(",", " ")

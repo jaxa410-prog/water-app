@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     WebAppInfo, 
     InlineKeyboardMarkup, 
@@ -38,6 +40,11 @@ ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit(
 BONUS_PHYSICAL = 3500
 BONUS_JURIDICAL = 2000
 UZ_TIMEZONE = timezone(timedelta(hours=5))
+
+# Состояния FSM для запоминания выбранного курьера и периода
+class CourierStatStates(StatesGroup):
+    waiting_for_period = State()
+    waiting_for_action = State()
 
 def load_couriers():
     if os.path.exists(COURIERS_FILE):
@@ -512,10 +519,12 @@ async def send_summary_report(target_message: types.Message):
         logging.error(f"Ошибка сводки: {e}", exc_info=True)
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ОТЧЕТ ПО КОНКРЕТНОМУ КУРЬЕРУ ЗА СЕГОДНЯ (ДЕТАЛЬНЫЙ)
-async def send_single_courier_today_report(target_message: types.Message, target_id: str):
+# ОТЧЕТ ПО КУРЬЕРУ ЗА ВЫБРАННЫЙ ПЕРИОД (ИТОГОВЫЙ)
+async def send_single_courier_period_report(target_message: types.Message, target_id: str, days: int = 1):
     try:
-        today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
+        now = datetime.now(UZ_TIMEZONE)
+        today_date_str = now.strftime("%Y-%m-%d")
+        cutoff = now - timedelta(days=days)
         reports = load_reports()
 
         phys_deliv = 0
@@ -530,27 +539,40 @@ async def send_single_courier_today_report(target_message: types.Message, target
         for r in reports:
             if str(r.get("courier_id", "")) == str(target_id):
                 r_date_str = str(r.get("date", ""))
-                if r_date_str.startswith(today_date):
-                    c_name = r.get("courier_name", c_name)
-                    c_username = r.get("courier_username", c_username)
-                    deliv = int(r.get("delivered", 0) or 0)
-                    ret = int(r.get("returned", 0) or 0)
-                    ctype = str(r.get("client_type", "Физ. лицо"))
-                    rev = int(r.get("total_price", 0) or 0)
-                    earn = int(r.get("earnings", 0) or 0)
+                try:
+                    r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UZ_TIMEZONE)
+                except Exception:
+                    continue
 
-                    if "Юр" in ctype:
-                        jur_deliv += deliv
-                    else:
-                        phys_deliv += deliv
+                if days == 1:
+                    if not r_date_str.startswith(today_date_str):
+                        continue
+                else:
+                    if r_date < cutoff:
+                        continue
 
-                    total_returned += ret
-                    total_revenue += rev
-                    total_earnings += earn
-                    orders_count += 1
+                c_name = r.get("courier_name", c_name)
+                c_username = r.get("courier_username", c_username)
+                deliv = int(r.get("delivered", 0) or 0)
+                ret = int(r.get("returned", 0) or 0)
+                ctype = str(r.get("client_type", "Физ. лицо"))
+                rev = int(r.get("total_price", 0) or 0)
+                earn = int(r.get("earnings", 0) or 0)
+
+                if "Юр" in ctype:
+                    jur_deliv += deliv
+                else:
+                    phys_deliv += deliv
+
+                total_returned += ret
+                total_revenue += rev
+                total_earnings += earn
+                orders_count += 1
+
+        period_title = f"ЗА СЕГОДНЯ ({today_date_str})" if days == 1 else f"ЗА ПОСЛЕДНИЕ 7 ДНЕЙ"
 
         if orders_count == 0:
-            await target_message.answer(f"📭 У курьера нет заказов за сегодня ({today_date}).")
+            await target_message.answer(f"📭 У курьера {c_name} нет заказов {period_title.lower()}.")
             return
 
         total_deliv = phys_deliv + jur_deliv
@@ -558,7 +580,7 @@ async def send_single_courier_today_report(target_message: types.Message, target
         earn_fmt = f"{total_earnings:,}".replace(",", " ")
 
         text = (
-            f"📊 СТАТИСТИКА КУРЬЕРА ЗА СЕГОДНЯ ({today_date})\n\n"
+            f"📊 СТАТИСТИКА КУРЬЕРА {period_title}\n\n"
             f"🚚 Курьер: {c_name} (@{c_username})\n"
             f"🆔 ID: {target_id}\n\n"
             f"📦 Выполнено заказов: {orders_count}\n"
@@ -574,7 +596,73 @@ async def send_single_courier_today_report(target_message: types.Message, target
         logging.error(f"Ошибка отчета курьера: {e}")
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ОБРАБОТЧИКИ ТЕКСТОВЫХ КОМАНОК МЕНЮ
+# ПОДРОБНЫЙ СПИСОК ВСЕХ ЗАКАЗОВ КУРЬЕРА ЗА ПЕРИОД
+async def send_courier_detailed_orders(target_message: types.Message, target_id: str, days: int = 1):
+    try:
+        now = datetime.now(UZ_TIMEZONE)
+        today_date_str = now.strftime("%Y-%m-%d")
+        cutoff = now - timedelta(days=days)
+        reports = load_reports()
+
+        period_title = f"ЗА СЕГОДНЯ ({today_date_str})" if days == 1 else f"ЗА ПОСЛЕДНИЕ 7 ДНЕЙ"
+        matched_orders = []
+
+        for r in reports:
+            if str(r.get("courier_id", "")) == str(target_id):
+                r_date_str = str(r.get("date", ""))
+                try:
+                    r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UZ_TIMEZONE)
+                except Exception:
+                    continue
+
+                if days == 1:
+                    if not r_date_str.startswith(today_date_str):
+                        continue
+                else:
+                    if r_date < cutoff:
+                        continue
+                matched_orders.append(r)
+
+        if not matched_orders:
+            await target_message.answer(f"📭 У данного курьера нет заказов {period_title.lower()}.")
+            return
+
+        c_name = matched_orders[0].get("courier_name", "Курьер")
+        c_username = matched_orders[0].get("courier_username", "нет_юзернейма")
+
+        await target_message.answer(f"📋 ДЕТАЛЬНЫЙ СПИСОК ЗАКАЗОВ КУРЬЕРА\n👤 {c_name} (@{c_username}) — {period_title}:\n")
+
+        for idx, r in enumerate(matched_orders, 1):
+            date_time = r.get("date", "")
+            client_id = r.get("client_id", "Не указан")
+            delivered = r.get("delivered", 0)
+            returned = r.get("returned", 0)
+            client_type = r.get("client_type", "Физ. лицо")
+            payment_type = r.get("payment_type", "Наличные")
+            total_price = int(r.get("total_price", 0) or 0)
+            earnings = int(r.get("earnings", 0) or 0)
+
+            price_fmt = f"{total_price:,}".replace(",", " ")
+            earn_fmt = f"{earnings:,}".replace(",", " ")
+
+            order_text = (
+                f"🔹 **Заказ #{idx}** от `{date_time}`\n"
+                f"🆔 Клиент / Фирма: `{client_id}`\n"
+                f"👥 Тип клиента: {client_type}\n"
+                f"💧 Сдал полных: **{delivered} шт.**\n"
+                f"🔄 Принял пустых: **{returned} шт.**\n"
+                f"💳 Оплата: {payment_type}\n"
+                f"💰 Сумма: **{price_fmt} сум**\n"
+                f"💵 ЗП за заказ: **{earn_fmt} сум**\n"
+                f"────────────────────────"
+            )
+            await target_message.answer(order_text, parse_mode="Markdown")
+
+    except Exception as e:
+        logging.error(f"Ошибка детального списка заказов: {e}")
+        await target_message.answer(f"⚠️ Ошибка: {e}")
+
+# ТЕКСТОВОЕ МЕНЮ
 @dp.message(F.text == "📊 Сводка за сегодня")
 async def cmd_summary(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -583,7 +671,7 @@ async def cmd_summary(message: types.Message):
     await send_summary_report(message)
 
 @dp.message(F.text == "🚚 Статистика по курьерам")
-async def cmd_couriers_list(message: types.Message):
+async def cmd_couriers_list(message: types.Message, state: FSMContext):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ Нет прав.")
         return
@@ -601,32 +689,75 @@ async def cmd_couriers_list(message: types.Message):
         await message.answer("📭 В базе пока нет ни одного отчета.")
         return
 
-    # Создаем текстовую клавиатуру для выбора курьера
     keyboard_buttons = []
     for cid, label in courier_map.items():
         keyboard_buttons.append([KeyboardButton(text=f"👤 Курьер: {cid} | {label[:20]}")])
     
     keyboard_buttons.append([KeyboardButton(text="🔙 Главное меню")])
     markup = ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
-    await message.answer("👤 Выберите курьера для просмотра статистики за сегодня:", reply_markup=markup)
+    await message.answer("👤 Выберите курьера:", reply_markup=markup)
 
-# ПЕРЕХВАТЧИК ВЫБОРА КОНКРЕТНОГО КУРЬЕРА ЧЕРЕЗ ТЕКСТОВУЮ КНОПКУ
 @dp.message(F.text.startswith("👤 Курьер: "))
-async def handle_selected_courier(message: types.Message):
+async def handle_selected_courier(message: types.Message, state: FSMContext):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ Нет прав.")
         return
     
     try:
-        # Извлекаем ID курьера из текста кнопки "👤 Курьер: ID | Имя"
-        parts = message.text.split(" | ")[0].replace("👤 Курьер: ", "").strip()
-        target_id = parts
-        await send_single_courier_today_report(message, target_id)
+        target_id = message.text.split(" | ")[0].replace("👤 Курьер: ", "").strip()
+        await state.update_data(selected_courier_id=target_id)
+        await state.set_state(CourierStatStates.waiting_for_period)
+
+        buttons = [
+            [KeyboardButton(text="📅 За сегодня"), KeyboardButton(text="📅 За неделю (7 дней)")],
+            [KeyboardButton(text="🔙 Главное меню")]
+        ]
+        markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+        await message.answer(f"📅 Выберите период для курьера (ID: `{target_id}`):", reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
         await message.answer(f"⚠️ Не удалось распознать курьера: {e}")
 
+@dp.message(CourierStatStates.waiting_for_period, F.text.in_({"📅 За сегодня", "📅 За неделю (7 дней)"}))
+async def handle_courier_period(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("selected_courier_id")
+    
+    if not target_id:
+        await message.answer("⚠️ Курьер не выбран. Попробуйте снова.")
+        await state.clear()
+        return
+
+    days = 1 if message.text == "📅 За сегодня" else 7
+    # Сохраняем выбранный период в состояние и предлагаем формат вывода
+    await state.update_data(selected_days=days)
+    await state.set_state(CourierStatStates.waiting_for_action)
+
+    buttons = [
+        [KeyboardButton(text="📈 Итоговая статистика"), KeyboardButton(text="📋 Список всех заказов")],
+        [KeyboardButton(text="🔙 Главное меню")]
+    ]
+    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    await message.answer("📊 Как отобразить данные?", reply_markup=markup)
+
+@dp.message(CourierStatStates.waiting_for_action, F.text.in_({"📈 Итоговая статистика", "📋 Список всех заказов"}))
+async def handle_courier_action(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("selected_courier_id")
+    days = data.get("selected_days", 1)
+
+    if not target_id:
+        await message.answer("⚠️ Сессия истекла. Начните заново.")
+        await state.clear()
+        return
+
+    if message.text == "📈 Итоговая статистика":
+        await send_single_courier_period_report(message, target_id, days)
+    else:
+        await send_courier_detailed_orders(message, target_id, days)
+
 @dp.message(F.text == "🔙 Главное меню")
-async def back_to_main_menu(message: types.Message):
+async def back_to_main_menu(message: types.Message, state: FSMContext):
+    await state.clear()
     await cmd_start(message)
 
 # Команды управления
@@ -756,6 +887,7 @@ async def main():
     async def ping_loop():
         await asyncio.sleep(10)
         import aiohttp
+        async import aiohttp
         async with aiohttp.ClientSession() as session:
             while True:
                 try:

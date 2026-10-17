@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 import aiohttp
 from aiogram import Bot, Dispatcher, F, types
@@ -58,13 +59,8 @@ class CourierStatStates(StatesGroup):
     waiting_for_action = State()
 
 class RouteAdminStates(StatesGroup):
-    waiting_for_courier_id = State()
-    waiting_for_client_id = State()
-    waiting_for_client_name = State()
-    waiting_for_address = State()
-    waiting_for_phone = State()
-    waiting_for_planned = State()
-    waiting_for_task_type = State()
+    waiting_for_courier_selection = State()
+    waiting_for_bulk_text = State()
 
 # --- Функции работы с Supabase ---
 def load_couriers():
@@ -99,7 +95,6 @@ def load_reports():
         return []
 
 def get_or_create_client(client_id: str, client_name: str = ""):
-    """Получает или создает клиента и возвращает его текущий баланс тары"""
     if not supabase:
         return {"bottle_balance": 0}
     try:
@@ -119,7 +114,6 @@ def get_or_create_client(client_id: str, client_name: str = ""):
         return {"bottle_balance": 0}
 
 def get_courier_route(courier_id: int):
-    """Получает список задач курьера на сегодня из таблицы daily_routes"""
     if not supabase:
         return []
     try:
@@ -136,10 +130,6 @@ def get_courier_route(courier_id: int):
         return []
 
 def save_report_to_db_with_balance(data):
-    """
-    Сохраняет отчет с проверкой баланса тары (защита от махинаций),
-    обновляет таблицу clients, фиксирует лог и закрывает задачу в маршруте.
-    """
     if not supabase:
         return False, "Supabase не подключен"
     
@@ -147,29 +137,22 @@ def save_report_to_db_with_balance(data):
     delivered = int(data.get("delivered", 0))
     returned = int(data.get("returned", 0))
     courier_id = str(data.get("user_id"))
-    task_type = data.get("task_type", "delivery")
 
-    # 1. Получаем текущий баланс тары клиента
     client_info = get_or_create_client(client_id)
     current_balance = client_info["bottle_balance"]
 
-    # 2. ЗАЩИТА: Курьер не может вернуть больше, чем есть на руках у клиента + доставлено в этот раз
     max_return_allowed = current_balance + delivered
     if returned > max_return_allowed:
         return False, f"Ошибка! У клиента на руках всего {current_balance} шт. Нельзя вернуть {returned} (максимум: {max_return_allowed})."
 
-    # 3. Считаем новый баланс тары
     new_balance = current_balance + delivered - returned
 
     try:
-        # 4. Запись отчета в reports
         res = supabase.table("reports").insert(data).execute()
         report_id = res.data[0]["id"] if res.data and "id" in res.data[0] else None
 
-        # 5. Обновляем баланс в таблице clients
         supabase.table("clients").update({"bottle_balance": new_balance}).eq("client_id", client_id).execute()
 
-        # 6. Пишем аудит-лог в report_logs
         supabase.table("report_logs").insert({
             "report_id": report_id,
             "client_id": client_id,
@@ -179,7 +162,6 @@ def save_report_to_db_with_balance(data):
             "new_returned": returned
         }).execute()
 
-        # 7. Закрываем задачу в daily_routes (если она там была)
         supabase.table("daily_routes").update({"status": "completed"})\
             .eq("courier_id", courier_id)\
             .eq("client_id", client_id)\
@@ -191,7 +173,7 @@ def save_report_to_db_with_balance(data):
         return False, str(e)
 
 
-# HTML Mini App с отображением маршрута на сегодня
+# HTML Mini App
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -208,74 +190,36 @@ HTML_CONTENT = """
             margin: 0;
             padding: 16px;
         }
-        .container {
-            max-width: 420px;
-            margin: 0 auto;
-        }
-        h2 {
-            text-align: center;
-            font-size: 20px;
-            margin-bottom: 15px;
-        }
+        .container { max-width: 420px; margin: 0 auto; }
+        h2 { text-align: center; font-size: 20px; margin-bottom: 15px; }
         .task-card {
             background: var(--tg-theme-secondary-bg-color, #ffffff);
-            padding: 14px;
-            border-radius: 10px;
-            margin-bottom: 10px;
+            padding: 14px; border-radius: 10px; margin-bottom: 10px;
             box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-            border-left: 5px solid #2481cc;
-            cursor: pointer;
+            border-left: 5px solid #2481cc; cursor: pointer;
         }
-        .task-card.completed {
-            border-left-color: #16a34a;
-            opacity: 0.6;
-        }
-        .client-name {
-            font-weight: 600;
-            font-size: 16px;
-            margin-bottom: 4px;
-        }
-        .client-info {
-            font-size: 13px;
-            color: #6b7280;
-            margin-bottom: 2px;
-        }
+        .task-card.completed { border-left-color: #16a34a; opacity: 0.6; }
+        .client-name { font-weight: 600; font-size: 16px; margin-bottom: 4px; }
+        .client-info { font-size: 13px; color: #6b7280; margin-bottom: 2px; }
         .task-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            font-size: 11px;
-            font-weight: 600;
-            border-radius: 4px;
-            margin-top: 6px;
-            background: #e0f2fe;
-            color: #0369a1;
+            display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600;
+            border-radius: 4px; margin-top: 6px; background: #e0f2fe; color: #0369a1;
         }
         #formModal {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5);
-            justify-content: center;
-            align-items: center;
-            padding: 16px;
-            box-sizing: border-box;
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); justify-content: center; align-items: center;
+            padding: 16px; box-sizing: border-box;
         }
         .modal-content {
-            background: var(--tg-theme-bg-color, #fff);
-            padding: 20px;
-            border-radius: 12px;
-            width: 100%;
-            max-width: 380px;
-            max-height: 90vh;
-            overflow-y: auto;
+            background: var(--tg-theme-bg-color, #fff); padding: 20px; border-radius: 12px;
+            width: 100%; max-width: 380px; max-height: 90vh; overflow-y: auto;
         }
         .form-group { margin-bottom: 12px; }
         label { display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500; }
         input, select {
             width: 100%; padding: 10px; box-sizing: border-box;
             border: 1px solid #ccc; border-radius: 8px; font-size: 15px;
-            background: var(--tg-theme-secondary-bg-color, #fff);
-            color: var(--tg-theme-text-color, #000);
+            background: var(--tg-theme-secondary-bg-color, #fff); color: var(--tg-theme-text-color, #000);
         }
         button {
             width: 100%; background-color: var(--tg-theme-button-color, #2481cc);
@@ -292,7 +236,6 @@ HTML_CONTENT = """
         <div id="routeList">Загрузка маршрута...</div>
     </div>
 
-    <!-- Модальное окно заполнения отчета по точке -->
     <div id="formModal">
         <div class="modal-content">
             <h3 id="modalTitle" style="margin-top:0; font-size:18px;">Сдача точки</h3>
@@ -300,11 +243,11 @@ HTML_CONTENT = """
                 <input type="hidden" id="modalClientId">
                 <input type="hidden" id="modalTaskType">
                 <div class="form-group">
-                    <label id="lblDelivered">Сдал полных (19л):</label>
+                    <label>Сдал полных (19л):</label>
                     <input type="number" id="delivered" min="0" required>
                 </div>
                 <div class="form-group">
-                    <label id="lblReturned">Принял пустых (19л):</label>
+                    <label>Принял пустых (19л):</label>
                     <input type="number" id="returned" min="0" required>
                 </div>
                 <div class="form-group">
@@ -503,7 +446,6 @@ async def handle_api_report(request):
             "task_type": task_type
         }
 
-        # Сохранение с проверкой лимитов возврата тары
         success, result_msg = save_report_to_db_with_balance(report_record)
         if not success:
             return web.json_response({"status": "error", "message": result_msg}, status=400)
@@ -544,14 +486,12 @@ async def handle_api_report(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 async def api_get_route(request):
-    """API эндпоинт для Mini App: возвращает маршрут курьера на сегодня"""
     courier_id = request.rel_url.query.get("courier_id")
     if not courier_id:
         return web.json_response([], status=400)
     routes = get_courier_route(int(courier_id))
     return web.json_response(routes)
 
-# ОБЩИЙ СВОДНЫЙ ОТЧЕТ
 async def send_summary_report(target_message: types.Message):
     try:
         today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
@@ -635,7 +575,6 @@ async def send_summary_report(target_message: types.Message):
         logging.error(f"Ошибка сводки: {e}", exc_info=True)
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ОТЧЕТ ПО КУРЬЕРУ ЗА ВЫБРАННЫЙ ПЕРИОД
 async def send_single_courier_period_report(target_message: types.Message, target_id: str, days: int = 1):
     try:
         now = datetime.now(UZ_TIMEZONE)
@@ -643,14 +582,8 @@ async def send_single_courier_period_report(target_message: types.Message, targe
         cutoff = now - timedelta(days=days)
         reports = load_reports()
 
-        phys_deliv = 0
-        jur_deliv = 0
-        total_returned = 0
-        total_revenue = 0
-        total_earnings = 0
-        orders_count = 0
-        c_name = "Курьер"
-        c_username = "нет_юзернейма"
+        phys_deliv, jur_deliv, total_returned, total_revenue, total_earnings, orders_count = 0, 0, 0, 0, 0, 0
+        c_name, c_username = "Курьер", "нет_юзернейма"
 
         for r in reports:
             if str(r.get("courier_id", "")) == str(target_id):
@@ -661,11 +594,9 @@ async def send_single_courier_period_report(target_message: types.Message, targe
                     continue
 
                 if days == 1:
-                    if not r_date_str.startswith(today_date_str):
-                        continue
+                    if not r_date_str.startswith(today_date_str): continue
                 else:
-                    if r_date < cutoff:
-                        continue
+                    if r_date < cutoff: continue
 
                 c_name = r.get("courier_name", c_name)
                 c_username = r.get("courier_username", c_username)
@@ -675,10 +606,8 @@ async def send_single_courier_period_report(target_message: types.Message, targe
                 rev = int(r.get("total_price", 0) or 0)
                 earn = int(r.get("earnings", 0) or 0)
 
-                if "Юр" in ctype:
-                    jur_deliv += deliv
-                else:
-                    phys_deliv += deliv
+                if "Юр" in ctype: jur_deliv += deliv
+                else: phys_deliv += deliv
 
                 total_returned += ret
                 total_revenue += rev
@@ -686,7 +615,6 @@ async def send_single_courier_period_report(target_message: types.Message, targe
                 orders_count += 1
 
         period_title = f"ЗА СЕГОДНЯ ({today_date_str})" if days == 1 else f"ЗА ПОСЛЕДНИЕ 7 ДНЕЙ"
-
         if orders_count == 0:
             await target_message.answer(f"📭 У курьера {c_name} нет заказов {period_title.lower()}.")
             return
@@ -712,7 +640,6 @@ async def send_single_courier_period_report(target_message: types.Message, targe
         logging.error(f"Ошибка отчета курьера: {e}")
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ПОДРОБНЫЙ СПИСОК ВСЕХ ЗАКАЗОВ КУРЬЕРА ЗА ПЕРИОД
 async def send_courier_detailed_orders(target_message: types.Message, target_id: str, days: int = 1):
     try:
         now = datetime.now(UZ_TIMEZONE)
@@ -732,11 +659,9 @@ async def send_courier_detailed_orders(target_message: types.Message, target_id:
                     continue
 
                 if days == 1:
-                    if not r_date_str.startswith(today_date_str):
-                        continue
+                    if not r_date_str.startswith(today_date_str): continue
                 else:
-                    if r_date < cutoff:
-                        continue
+                    if r_date < cutoff: continue
                 matched_orders.append(r)
 
         if not matched_orders:
@@ -778,7 +703,7 @@ async def send_courier_detailed_orders(target_message: types.Message, target_id:
         logging.error(f"Ошибка детального списка заказов: {e}")
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ТЕКСТОВОЕ МЕНЮ И КОМАНДЫ
+# --- ТЕКСТОВОЕ МЕНЮ И КОМАНДЫ ---
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -794,7 +719,7 @@ async def cmd_start(message: types.Message):
         keyboard = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="📊 Сводка за сегодня"), KeyboardButton(text="🚚 Статистика по курьерам")],
-                [KeyboardButton(text="📋 Назначить маршрут курьеру"), KeyboardButton(text="🔙 Главное меню")]
+                [KeyboardButton(text="📋 Отправить маршрут списком"), KeyboardButton(text="🔙 Главное меню")]
             ],
             resize_keyboard=True
         )
@@ -899,137 +824,117 @@ async def handle_courier_action(message: types.Message, state: FSMContext):
     else:
         await send_courier_detailed_orders(message, target_id, days)
 
-# --- АДМИНКА: ПОШАГОВОЕ НАЗНАЧЕНИЕ МАРШРУТА ЧЕРЕЗ БОТА ---
+# --- АДМИНКА: МАССОВАЯ ЗАГРУЗКА МАРШРУТА ИЗ ВАШЕГО ТЕКСТА ---
 
-@dp.message(F.text == "📋 Назначить маршрут курьеру")
-async def start_add_route(message: types.Message, state: FSMContext):
+@dp.message(F.text == "📋 Отправить маршрут списком")
+async def start_bulk_route(message: types.Message, state: FSMContext):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ Нет прав.")
         return
-    
-    await state.set_state(RouteAdminStates.waiting_for_courier_id)
+
     couriers = load_couriers()
-    courier_text = f"Известные ID курьеров в базе: `{couriers}`\n\n" if couriers else ""
+    if not couriers:
+        await message.answer("⚠️ В базе данных пока нет ни одного сохраненного курьера (`couriers`). Сначала добавьте курьера через `/add ID`.")
+        return
+
+    # Создаем инлайн-кнопки с действующими курьерами
+    keyboard_buttons = []
+    for cid in couriers:
+        keyboard_buttons.append([InlineKeyboardButton(text=f"👤 Курьер ID: {cid}", callback_data=f"select_courier_{cid}")])
     
-    await message.answer(
-        f"{courier_text}✍️ Введите **Telegram ID курьера**, которому назначаем точку:",
-        parse_mode="Markdown",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 Главное меню")]], resize_keyboard=True)
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    await message.answer("👥 Выберите курьера, которому хотите отправить этот список маршрута:", reply_markup=markup)
+    await state.set_state(RouteAdminStates.waiting_for_courier_selection)
+
+@dp.callback_query(RouteAdminStates.waiting_for_courier_selection, F.data.startswith("select_courier_"))
+async def courier_selected_callback(callback: types.CallbackQuery, state: FSMContext):
+    courier_id = callback.data.replace("select_courier_", "")
+    await state.update_data(target_courier_id=courier_id)
+    await state.set_state(RouteAdminStates.waiting_for_bulk_text)
+
+    await callback.message.edit_text(
+        f"✅ Выбран курьер ID: `{courier_id}`\n\n"
+        f"📝 Теперь **отправьте или вставьте весь ваш текст маршрута** одним сообщением (с номерами, адресами, телефонами и количеством бутылей). Бот сам автоматически разобьет его на задачи!",
+        parse_mode="Markdown"
     )
+    await callback.answer()
 
-@dp.message(RouteAdminStates.waiting_for_courier_id)
-async def process_route_courier_id(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await back_to_main_menu(message, state)
-        return
-    if not message.text.isdigit():
-        await message.answer("⚠️ ID должен состоять только из цифр. Попробуйте снова:")
-        return
-
-    await state.update_data(courier_id=message.text.strip())
-    await state.set_state(RouteAdminStates.waiting_for_client_id)
-    await message.answer("🆔 Введите **ID или номер клиента** в системе (например: `client_001` или `123`):", parse_mode="Markdown")
-
-@dp.message(RouteAdminStates.waiting_for_client_id)
-async def process_route_client_id(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await back_to_main_menu(message, state)
-        return
-    await state.update_data(client_id=message.text.strip())
-    await state.set_state(RouteAdminStates.waiting_for_client_name)
-    await message.answer("🏢 Введите **Имя клиента / название фирмы** (например: `ООО СуперОфис` или `Алишер ака`):")
-
-@dp.message(RouteAdminStates.waiting_for_client_name)
-async def process_route_client_name(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await back_to_main_menu(message, state)
-        return
-    await state.update_data(client_name=message.text.strip())
-    await state.set_state(RouteAdminStates.waiting_for_address)
-    await message.answer("📍 Введите **адрес доставки** (например: `ул. Навои, дом 15, кв 4`):")
-
-@dp.message(RouteAdminStates.waiting_for_address)
-async def process_route_address(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await back_to_main_menu(message, state)
-        return
-    await state.update_data(address=message.text.strip())
-    await state.set_state(RouteAdminStates.waiting_for_phone)
-    await message.answer("📞 Введите **номер телефона** клиента (например: `+998901234567`):")
-
-@dp.message(RouteAdminStates.waiting_for_phone)
-async def process_route_phone(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await back_to_main_menu(message, state)
-        return
-    await state.update_data(phone=message.text.strip())
-    await state.set_state(RouteAdminStates.waiting_for_planned)
-    await message.answer("💧 Введите **план: сколько полных бутылей (19л)** привезти (только число, например: `5`):")
-
-@dp.message(RouteAdminStates.waiting_for_planned)
-async def process_route_planned(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await back_to_main_menu(message, state)
-        return
-    if not message.text.isdigit():
-        await message.answer("⚠️ Введите число бутылей цифрами:")
-        return
-
-    await state.update_data(planned_delivered=int(message.text.strip()))
-    await state.set_state(RouteAdminStates.waiting_for_task_type)
-
-    markup = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🚚 Доставка (delivery)")],
-            [KeyboardButton(text="🔄 Расторжение (termination)"), KeyboardButton(text="🧼 Чистка кулера (service)")],
-            [KeyboardButton(text="🔙 Главное меню")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("⚙️ Выберите **тип задачи** для этой точки:", reply_markup=markup, parse_mode="Markdown")
-
-@dp.message(RouteAdminStates.waiting_for_task_type)
-async def process_route_task_type(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Главное меню":
-        await back_to_main_menu(message, state)
-        return
-
-    task_map = {
-        "🚚 Доставка (delivery)": "delivery",
-        "🔄 Расторжение (termination)": "termination",
-        "🧼 Чистка кулера (service)": "service"
-    }
-    task_type = task_map.get(message.text, "delivery")
+@dp.message(RouteAdminStates.waiting_for_bulk_text)
+async def process_bulk_route_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
+    courier_id = data.get("target_courier_id")
+    raw_text = message.text
+
+    if not courier_id:
+        await message.answer("⚠️ Ошибка: курьер не выбран. Начните заново.")
+        await state.clear()
+        return
+
+    # Парсим текст по строкам, начинающимся с цифры и точки (например, "1.", "2.", ...)
+    lines = raw_text.split("\n")
+    tasks_to_add = []
+    current_task_lines = []
+
+    for line in lines:
+        # Проверяем, начинается ли строка с номера пункта (например, "1.", "12.")
+        if re.match(r"^\d+[\.\)]", line.strip()):
+            if current_task_lines:
+                tasks_to_add.append("\n".join(current_task_lines))
+                current_task_lines = []
+        current_task_lines.append(line)
+    
+    if current_task_lines:
+        tasks_to_add.append("\n".join(current_task_lines))
 
     today_str = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
-    route_record = {
-        "date": today_str,
-        "courier_id": data.get("courier_id"),
-        "client_id": data.get("client_id"),
-        "client_name": data.get("client_name"),
-        "address": data.get("address"),
-        "phone": data.get("phone"),
-        "planned_delivered": data.get("planned_delivered"),
-        "task_type": task_type,
-        "status": "pending"
-    }
+    added_count = 0
 
-    try:
-        supabase.table("daily_routes").insert(route_record).execute()
-        await message.answer(
-            f"✅ **Точка успешно добавлена в маршрут курьеру!**\n\n"
-            f"👤 Курьер ID: `{data.get('courier_id')}`\n"
-            f"🏢 Клиент: {data.get('client_name')} (ID: {data.get('client_id')})\n"
-            f"📍 Адрес: {data.get('address')}\n"
-            f"💧 План: {data.get('planned_delivered')} шт.\n"
-            f"⚙️ Тип: {task_type}",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logging.error(f"Ошибка сохранения маршрута через бота: {e}")
-        await message.answer(f"⚠️ Ошибка при сохранении в базу данных: {e}")
+    for task_text in tasks_to_add:
+        lines_in_task = task_text.strip().split("\n")
+        first_line = lines_in_task[0] if lines_in_task else ""
+        full_block = " ".join(lines_in_task)
 
+        # 1. Ищем ID клиента (первое число в первой строке)
+        client_id_match = re.search(r"^(\d+)", first_line.strip())
+        client_id = client_id_match.group(1) if client_id_match else f"client_{added_count+1}"
+
+        # 2. Ищем количество бутылей (например, "50К", "5к", "2к")
+        planned_match = re.search(r"(\d+)\s*[кКкВштШТ]+", full_block)
+        planned_delivered = int(planned_match.group(1)) if planned_match else 1
+
+        # 3. Ищем телефоны (номера от 7-12 цифр)
+        phones = re.findall(r"(?:\+?998)?\d{9}", full_block)
+        phone = phones[0] if phones else "Нет телефона"
+
+        # 4. Формируем название клиента и адрес из текста
+        client_name = first_line.split("адрес:")[0].split("ул.")[0].strip()
+        address = full_block[:150] # Берем срез под адрес
+
+        route_record = {
+            "date": today_str,
+            "courier_id": str(courier_id),
+            "client_id": str(client_id),
+            "client_name": client_name[:100],
+            "address": address,
+            "phone": phone,
+            "planned_delivered": planned_delivered,
+            "task_type": "delivery",
+            "status": "pending"
+        }
+
+        try:
+            supabase.table("daily_routes").insert(route_record).execute()
+            added_count += 1
+        except Exception as e:
+            logging.error(f"Ошибка сохранения пункта маршрута: {e}")
+
+    await message.answer(
+        f"✅ **Маршрут успешно разобран и сохранен!**\n\n"
+        f"👤 Курьер ID: `{courier_id}`\n"
+        f"📦 Успешно добавлено точек в базу: **{added_count} шт.**\n\n"
+        f"Теперь курьер может открыть свой Mini App и увидеть этот маршрут.",
+        parse_mode="Markdown"
+    )
     await state.clear()
     await cmd_start(message)
 
@@ -1063,7 +968,7 @@ async def cmd_remove_courier(message: types.Message):
         return
     args = message.text.split()
     if len(args) < 2 or not args[1].isdigit():
-        await message.answer("⚠️ Использование: `/remove ТЕЛЕГРАМ_ID`", parse_mode="Markdown")
+        await message.answer("⚠️ Использование: `/remove ТЕЛЕГRAМ_ID`", parse_mode="Markdown")
         return
     target_id = int(args[1])
     couriers = load_couriers()

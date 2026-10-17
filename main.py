@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -40,6 +40,9 @@ ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit(
 # Актуальные ставки заработка курьера за 1 бутыль (в сумах)
 BONUS_PHYSICAL = 3500   # За физ. лицо — 3500 сум
 BONUS_JURIDICAL = 2000  # За юр. лицо — 2000 сум
+
+# Часовой пояс Узбекистана (UTC+5) для точного расчета "сегодня"
+UZ_TIMEZONE = timezone(timedelta(hours=5))
 
 
 def load_couriers():
@@ -397,7 +400,8 @@ async def handle_api_report(request):
         rate = BONUS_JURIDICAL if "Юр" in client_type else BONUS_PHYSICAL
         courier_earnings = delivered * rate
         
-        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Сохраняем время отчета по Ташкенту (UTC+5)
+        current_datetime = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
         report_record = {
             "date": current_datetime,
@@ -550,9 +554,16 @@ async def admin_panel_select_courier(message: types.Message):
 
 @dp.callback_query(F.data.startswith("sel_cour_"))
 async def admin_select_period(callback: types.CallbackQuery):
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        await callback.message.answer("❌ Нет доступа")
+        try:
+            await callback.message.answer("❌ Нет доступа")
+        except Exception:
+            pass
         return
 
     courier_id = callback.data.split("_")[2]
@@ -587,9 +598,16 @@ async def admin_select_period(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("rep_"))
 async def admin_show_courier_report(callback: types.CallbackQuery):
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        await callback.message.answer("❌ Нет доступа")
+        try:
+            await callback.message.answer("❌ Нет доступа")
+        except Exception:
+            pass
         return
 
     parts = callback.data.split("_")
@@ -598,7 +616,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
 
     days_limit = int(period) if period.isdigit() else None
     reports = load_reports()
-    now = datetime.now()
+    now = datetime.now(UZ_TIMEZONE)
 
     phys_deliv = 0
     jur_deliv = 0
@@ -614,7 +632,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         if r_cid == str(target_id):
             r_date_str = r.get("date", "")
             try:
-                r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S")
+                r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UZ_TIMEZONE)
             except Exception:
                 continue
 
@@ -682,7 +700,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         await callback.message.answer(text)
 
 
-# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (БЕЗОПАСНЫЙ ОБРАБОТЧИК)
+# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (ЗА СЕГОДНЯ С УЧЕТОМ UTC+5)
 @dp.callback_query(F.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     try:
@@ -698,7 +716,7 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
         return
 
     try:
-        today_date = datetime.now().strftime("%Y-%m-%d")
+        today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
         reports = load_reports()
         
         if not reports:
@@ -755,8 +773,7 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
             last_date = reports[-1].get("date", "нет данных") if reports else "нет данных"
             msg = (
                 f"📭 За сегодня (`{today_date}`) отчетов не найдено.\n"
-                f"📅 Последний отчет в базе был от: `{last_date}`\n"
-                f"(Возможна разница часовых поясов на сервере Render)."
+                f"📅 Последний отчет в базе был от: `{last_date}`"
             )
             try:
                 await callback.message.edit_text(msg, parse_mode="Markdown")
@@ -872,7 +889,7 @@ async def open_report_btn(message: types.Message):
 @dp.message(F.text == "💰 Мой заработок за сегодня")
 async def check_today_earnings(message: types.Message):
     user_id = message.from_user.id
-    today_date = datetime.now().strftime("%Y-%m-%d")
+    today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
     
     reports = load_reports()
     total_earned = 0

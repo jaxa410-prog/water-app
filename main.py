@@ -450,32 +450,14 @@ async def handle_api_report(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
-# ==========================================
-# ОБРАБОТЧИКИ CALLBACK (Сводный отчет СТРОГО НАВЕРХУ)
-# ==========================================
-
-@dp.callback_query(F.data == "admin_stat_today_all")
-async def admin_stat_today_all_handler(callback: types.CallbackQuery):
-    logging.info(">>> СРАБОТАЛ ОБРАБОТЧИК СВОДНОГО ОТЧЕТА ЗА СЕГОДНЯ! <<<")
-    try:
-        await callback.answer("⏳ Формирование сводного отчета...")
-    except Exception:
-        pass
-
-    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        try:
-            await callback.message.answer("❌ Нет доступа")
-        except Exception:
-            pass
-        return
-
+# ФУНКЦИЯ ГЕНЕРАЦИИ СВОДНОГО ОТЧЕТА
+async def send_summary_report(target_message: types.Message):
     try:
         today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
         reports = load_reports()
         
         if not reports:
-            msg = "📭 База данных reports.json пуста."
-            await callback.message.answer(msg)
+            await target_message.answer("📭 База данных reports.json пуста.")
             return
 
         courier_stats = {}
@@ -526,7 +508,7 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
                 f"📭 За сегодня (`{today_date}`) отчетов не найдено.\n"
                 f"📅 Последний отчет в базе был от: `{last_date}`"
             )
-            await callback.message.answer(msg, parse_mode="Markdown")
+            await target_message.answer(msg, parse_mode="Markdown")
             return
 
         text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
@@ -564,16 +546,42 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
             f"💵 Всего курьерских: {tot_earn_fmt} сум"
         )
 
-        await callback.message.answer(text)
+        await target_message.answer(text)
 
     except Exception as e:
-        logging.error(f"Ошибка в общем сводном отчете: {e}", exc_info=True)
+        logging.error(f"Ошибка формирования сводного отчета: {e}", exc_info=True)
+        await target_message.answer(f"⚠️ Ошибка формирования отчета: {e}")
+
+
+# ТЕКСТОВАЯ КОМАНДА СВОДНОГО ОТЧЕТА (100% НАДЕЖНОСТЬ)
+@dp.message(F.text == "📊 Сводка за сегодня")
+@dp.message(Command("summary"))
+async def cmd_summary_text(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+    await send_summary_report(message)
+
+
+# ИНЛАЙН ОБРАБОТЧИК КНОПКИ СВОДКИ
+@dp.callback_query(lambda c: c.data == "admin_stat_today_all")
+async def admin_stat_today_all_handler(callback: types.CallbackQuery):
+    try:
+        await callback.answer("⏳ Загрузка...")
+    except Exception:
+        pass
+
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
         try:
-            await callback.message.answer(f"⚠️ Ошибка формирования отчета: {e}")
+            await callback.message.answer("❌ Нет доступа")
         except Exception:
             pass
+        return
+
+    await send_summary_report(callback.message)
 
 
+# КНОПКИ ПЕРИОДОВ КУРЬЕРОВ
 @dp.callback_query(lambda c: c.data and c.data.startswith("sel_cour_"))
 async def admin_select_period(callback: types.CallbackQuery):
     try:
@@ -722,7 +730,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         await callback.message.answer(text)
 
 
-# Команды админа и обычные сообщения
+# Команды админа
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -835,6 +843,7 @@ async def cmd_start(message: types.Message):
             return
 
     buttons = [
+        [KeyboardButton(text="📊 Сводка за сегодня")],
         [KeyboardButton(text="💰 Мой заработок за сегодня")],
         [KeyboardButton(text="📦 Открыть отчет / Hisobotni ochish")]
     ]
@@ -856,7 +865,7 @@ async def cmd_start(message: types.Message):
     )
     
     await message.answer(
-        "👋 Добро пожаловать!\nИспользуйте кнопку ниже для отправки отчета или меню для проверки статистики.", 
+        "👋 Добро пожаловать!\nИспользуйте меню ниже для работы с системой.", 
         reply_markup=keyboard
     )
     await message.answer("Меню управления:", reply_markup=markup)

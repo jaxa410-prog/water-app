@@ -17,12 +17,25 @@ from aiogram.types import (
     Update
 )
 from aiohttp import web
+from supabase import create_client, Client
 
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
+
+# Подключение к Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logging.info("Успешное подключение к Supabase!")
+    except Exception as e:
+        logging.error(f"Ошибка подключения к Supabase: {e}")
 
 WEB_SERVER_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com").rstrip("/")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -31,10 +44,6 @@ WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-COURIERS_FILE = os.path.join(BASE_DIR, "couriers.json")
-REPORTS_FILE = os.path.join(BASE_DIR, "reports.json")
-
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
 
@@ -42,45 +51,53 @@ BONUS_PHYSICAL = 3500
 BONUS_JURIDICAL = 2000
 UZ_TIMEZONE = timezone(timedelta(hours=5))
 
-# Состояния FSM для запоминания выбранного курьера и периода
+# Состояния FSM
 class CourierStatStates(StatesGroup):
     waiting_for_period = State()
     waiting_for_action = State()
 
+# --- Функции работы с Supabase ---
 def load_couriers():
-    if os.path.exists(COURIERS_FILE):
-        try:
-            with open(COURIERS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+    if not supabase:
+        return []
+    try:
+        response = supabase.table("couriers").select("user_id").execute()
+        return [row["user_id"] for row in response.data]
+    except Exception as e:
+        logging.error(f"Ошибка загрузки курьеров из Supabase: {e}")
+        return []
 
-def save_couriers(couriers):
-    with open(COURIERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(couriers, f, ensure_ascii=False, indent=4)
+def save_couriers_to_db(couriers_list):
+    if not supabase:
+        return
+    try:
+        # Синхронизация: очищаем и записываем актуальный список
+        supabase.table("couriers").delete().neq("user_id", 0).execute()
+        if couriers_list:
+            data_to_insert = [{"user_id": int(cid)} for cid in couriers_list]
+            supabase.table("couriers").insert(data_to_insert).execute()
+    except Exception as e:
+        logging.error(f"Ошибка сохранения курьеров в Supabase: {e}")
 
 def load_reports():
-    if os.path.exists(REPORTS_FILE):
-        try:
-            with open(REPORTS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception as e:
-            logging.error(f"Ошибка чтения reports.json: {e}")
-            return []
-    return []
+    if not supabase:
+        return []
+    try:
+        response = supabase.table("reports").select("*").execute()
+        return response.data
+    except Exception as e:
+        logging.error(f"Ошибка чтения отчетов из Supabase: {e}")
+        return []
 
 def save_report_to_db(report_data):
-    reports = load_reports()
-    reports.append(report_data)
+    if not supabase:
+        logging.error("Supabase не подключен, отчет не сохранен в БД!")
+        return
     try:
-        with open(REPORTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(reports, f, ensure_ascii=False, indent=4)
-        logging.info(f"Отчет успешно сохранен. Всего записей в базе: {len(reports)}")
+        supabase.table("reports").insert(report_data).execute()
+        logging.info("Отчет успешно сохранен в Supabase!")
     except Exception as e:
-        logging.error(f"Ошибка записи в reports.json: {e}")
+        logging.error(f"Ошибка записи отчета в Supabase: {e}")
 
 # HTML Mini App
 HTML_CONTENT = """
@@ -442,7 +459,7 @@ async def send_summary_report(target_message: types.Message):
         today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
         reports = load_reports()
         if not reports:
-            await target_message.answer("📭 База данных reports.json пуста.")
+            await target_message.answer("📭 База данных отчетов пуста.")
             return
 
         courier_stats = {}
@@ -776,8 +793,8 @@ async def cmd_add_courier(message: types.Message):
         await message.answer(f"ℹ️ Курьер с ID `{new_id}` уже есть.", parse_mode="Markdown")
     else:
         couriers.append(new_id)
-        save_couriers(couriers)
-        await message.answer(f"✅ Курьер с ID `{new_id}` добавлен!", parse_mode="Markdown")
+        save_couriers_to_db(couriers)
+        await message.answer(f"✅ Курьер с ID `{new_id}` добавлен в базу Supabase!", parse_mode="Markdown")
 
 @dp.message(Command("remove"))
 async def cmd_remove_courier(message: types.Message):
@@ -792,8 +809,8 @@ async def cmd_remove_courier(message: types.Message):
     couriers = load_couriers()
     if target_id in couriers:
         couriers.remove(target_id)
-        save_couriers(couriers)
-        await message.answer(f"🗑 Курьер с ID `{target_id}` удален.", parse_mode="Markdown")
+        save_couriers_to_db(couriers)
+        await message.answer(f"🗑 Курьер с ID `{target_id}` удален из базы.", parse_mode="Markdown")
     else:
         await message.answer(f"⚠️ Курьер не найден.", parse_mode="Markdown")
 
@@ -806,7 +823,7 @@ async def cmd_list_couriers(message: types.Message):
     if not couriers:
         await message.answer("📭 Список курьеров пуст.")
     else:
-        text = "📋 **Список курьеров (ID):**\n\n" + "\n".join([f"• `{cid}`" for cid in couriers])
+        text = "📋 **Список курьеров в базе (ID):**\n\n" + "\n".join([f"• `{cid}`" for cid in couriers])
         await message.answer(text, parse_mode="Markdown")
 
 @dp.message(CommandStart())

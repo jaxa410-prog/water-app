@@ -76,7 +76,7 @@ def save_report_to_db(report_data):
         json.dump(reports, f, ensure_ascii=False, indent=4)
 
 
-# Многоязычная HTML-страница Mini App (Русский / O'zbekcha) с исправленной отправкой
+# HTML-страница Mini App
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -151,9 +151,6 @@ HTML_CONTENT = """
             background-color: #d1d5db;
             color: #9ca3af;
             cursor: not-allowed;
-        }
-        button:active:not(:disabled) {
-            opacity: 0.8;
         }
     </style>
 </head>
@@ -314,7 +311,6 @@ HTML_CONTENT = """
                 total_price: totalPriceInput.value
             };
 
-            // Передаем данные боту через официальный метод Telegram WebApp
             tg.sendData(JSON.stringify(data));
             tg.close();
         });
@@ -400,7 +396,7 @@ async def cmd_list_couriers(message: types.Message):
         await message.answer(text, parse_mode="Markdown")
 
 
-# 3. Интерактивная Панель Админа (Выбор курьера)
+# 3. Интерактивная Панель Админа
 @dp.message(Command("stats"))
 @dp.message(F.text == "📊 Статистика админа")
 async def admin_panel_select_courier(message: types.Message):
@@ -535,7 +531,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
 
     if orders_count == 0:
         await callback.message.edit_text(
-            f"📭 У курьера **{courier_name}** (@{courier_username}) нет заказов {header_title.lower()}.",
+            f"📭 У курьера **{courier_name}** нет заказов {header_title.lower()}.",
             parse_mode="Markdown"
         )
         await callback.answer()
@@ -547,7 +543,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
 
     text = (
         f"📊 **СТАТИСТИКА КУРЬЕРА {header_title}**\n\n"
-        f"🚚 **Курьер:** {courier_name} (@{courier_username})\n"
+        f"🚚 **Курьер:** {courier_name}\n"
         f"🆔 **ID:** `{target_id}`\n\n"
         f"📦 Выполнено заказов: **{orders_count}**\n"
         f"👤 Физ. лицам сдал: **{phys_deliv} шт.**\n"
@@ -555,7 +551,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         f"💧 **Всего сдано полных:** **{total_deliv} шт.**\n"
         f"🔄 **Всего собрано пустых:** **{total_returned} шт.**\n"
         f"💰 Выручка компании: **{rev_fmt} сум**\n\n"
-        f"💵 **Итого заработок (Зарплата):** `{earn_fmt} сум`"
+        f"💵 **Итого заработок:** `{earn_fmt} сум`"
     )
 
     await callback.message.edit_text(text, parse_mode="Markdown")
@@ -570,7 +566,6 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
 
     today_date = datetime.now().strftime("%Y-%m-%d")
     reports = load_reports()
-
     courier_stats = {}
 
     for r in reports:
@@ -630,9 +625,9 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
         earn_fmt = f"{s['earnings']:,}".replace(",", " ")
 
         text += (
-            f"🚚 **{s['name']}** (@{s['username']})\n"
-            f"📦 Заказов: **{s['orders']}** | Сдано: **{total_courier_deliv} шт.** (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
-            f"🔄 Пустых: **{s['returned']} шт.** | Выручка: **{rev_fmt} сум** | ЗП: `{earn_fmt} сум`\n"
+            f"🚚 **{s['name']}**\n"
+            f"📦 Заказов: **{s['orders']}** | Сдано: **{total_courier_deliv} шт.**\n"
+            f"🔄 Пустых: **{s['returned']} шт.** | Выручка: **{rev_fmt} сум**\n"
             f"───────────────────\n"
         )
 
@@ -782,14 +777,14 @@ async def handle_web_app_data(message: types.Message):
         
         report_text = (
             f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
-            f"👤 **Курьер:** {courier_name} (@{courier_username})\n"
+            f"👤 **Курьер:** {courier_name}\n"
             f"🆔 **ID / Фирма:** `{client_id}`\n"
             f"💧 **Сдал полных (19л):** {delivered} шт.\n"
             f"🔄 **Принял пустых (19л):** {returned} шт.\n"
             f"👥 **Тип клиента:** {client_type}\n"
             f"💳 **Тип оплаты:** {payment_type}\n"
             f"💰 **Сумма заказа:** {formatted_price} сум\n"
-            f"💵 **Заработок курьера:** `{formatted_earnings} сум` ({rate:,} сум/шт)"
+            f"💵 **Заработок курьера:** `{formatted_earnings} сум`"
         )
 
         await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
@@ -806,7 +801,7 @@ async def handle_web_app_data(message: types.Message):
         await message.answer(f"❌ Произошла ошибка при сохранении отчета: {e}")
 
 
-# 5. Запуск и приветствие при рестарте
+# 5. Запуск
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)

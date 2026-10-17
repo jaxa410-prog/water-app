@@ -41,7 +41,7 @@ ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit(
 BONUS_PHYSICAL = 3500   # За физ. лицо — 3500 сум
 BONUS_JURIDICAL = 2000  # За юр. лицо — 2000 сум
 
-# Часовой пояс Узбекистана (UTC+5) для точного расчета "сегодня"
+# Часовой пояс Узбекистана (UTC+5)
 UZ_TIMEZONE = timezone(timedelta(hours=5))
 
 
@@ -370,7 +370,7 @@ async def handle_webhook(request):
         logging.error(f"Ошибка вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
-# Обработчик API запроса из формы Mini App
+# API сохранения отчета
 async def handle_api_report(request):
     try:
         data = await request.json()
@@ -385,7 +385,7 @@ async def handle_api_report(request):
         couriers = load_couriers()
         if couriers and sender_id and (sender_id not in couriers):
             if not (ADMIN_IDS and sender_id in ADMIN_IDS):
-                return web.json_response({"status": "error", "message": "У вас нет доступа (ID не найден в списке курьеров)"}, status=403)
+                return web.json_response({"status": "error", "message": "У вас нет доступа"}, status=403)
 
         client_id = str(data.get("client_id", "Не указан"))
         delivered = int(data.get("delivered", 0))
@@ -400,7 +400,6 @@ async def handle_api_report(request):
         rate = BONUS_JURIDICAL if "Юр" in client_type else BONUS_PHYSICAL
         courier_earnings = delivered * rate
         
-        # Сохраняем время отчета по Ташкенту (UTC+5)
         current_datetime = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
         report_record = {
@@ -444,7 +443,7 @@ async def handle_api_report(request):
                 target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
                 await bot.send_message(chat_id=target_chat, text=report_text)
             except Exception as channel_err:
-                logging.error(f"Ошибка при отправке в канал CHANNEL_ID ({CHANNEL_ID}): {channel_err}")
+                logging.error(f"Ошибка отправки в канал ({CHANNEL_ID}): {channel_err}")
 
         return web.json_response({"status": "ok"})
     except Exception as e:
@@ -552,7 +551,7 @@ async def admin_panel_select_courier(message: types.Message):
     await message.answer("👥 Панель администратора:\nВыберите курьера для просмотра статистики:", reply_markup=kb)
 
 
-@dp.callback_query(F.data.startswith("sel_cour_"))
+@dp.callback_query(lambda c: c.data and c.data.startswith("sel_cour_"))
 async def admin_select_period(callback: types.CallbackQuery):
     try:
         await callback.answer()
@@ -596,7 +595,7 @@ async def admin_select_period(callback: types.CallbackQuery):
         )
 
 
-@dp.callback_query(F.data.startswith("rep_"))
+@dp.callback_query(lambda c: c.data and c.data.startswith("rep_"))
 async def admin_show_courier_report(callback: types.CallbackQuery):
     try:
         await callback.answer()
@@ -700,11 +699,11 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         await callback.message.answer(text)
 
 
-# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (ЗА СЕГОДНЯ С УЧЕТОМ UTC+5)
-@dp.callback_query(F.data == "admin_stat_today_all")
+# НАДЕЖНЫЙ ОБРАБОТЧИК КНОПКИ СВОДНОГО ОТЧЕТА
+@dp.callback_query(lambda c: c.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     try:
-        await callback.answer()
+        await callback.answer("⏳ Формирование сводного отчета...")
     except Exception:
         pass
 

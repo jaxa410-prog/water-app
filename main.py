@@ -57,6 +57,15 @@ class CourierStatStates(StatesGroup):
     waiting_for_period = State()
     waiting_for_action = State()
 
+class RouteAdminStates(StatesGroup):
+    waiting_for_courier_id = State()
+    waiting_for_client_id = State()
+    waiting_for_client_name = State()
+    waiting_for_address = State()
+    waiting_for_phone = State()
+    waiting_for_planned = State()
+    waiting_for_task_type = State()
+
 # --- Функции работы с Supabase ---
 def load_couriers():
     if not supabase:
@@ -785,6 +794,7 @@ async def cmd_start(message: types.Message):
         keyboard = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="📊 Сводка за сегодня"), KeyboardButton(text="🚚 Статистика по курьерам")],
+                [KeyboardButton(text="📋 Назначить маршрут курьеру"), KeyboardButton(text="🔙 Главное меню")]
             ],
             resize_keyboard=True
         )
@@ -889,6 +899,140 @@ async def handle_courier_action(message: types.Message, state: FSMContext):
     else:
         await send_courier_detailed_orders(message, target_id, days)
 
+# --- АДМИНКА: ПОШАГОВОЕ НАЗНАЧЕНИЕ МАРШРУТА ЧЕРЕЗ БОТА ---
+
+@dp.message(F.text == "📋 Назначить маршрут курьеру")
+async def start_add_route(message: types.Message, state: FSMContext):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Нет прав.")
+        return
+    
+    await state.set_state(RouteAdminStates.waiting_for_courier_id)
+    couriers = load_couriers()
+    courier_text = f"Известные ID курьеров в базе: `{couriers}`\n\n" if couriers else ""
+    
+    await message.answer(
+        f"{courier_text}✍️ Введите **Telegram ID курьера**, которому назначаем точку:",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 Главное меню")]], resize_keyboard=True)
+    )
+
+@dp.message(RouteAdminStates.waiting_for_courier_id)
+async def process_route_courier_id(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+    if not message.text.isdigit():
+        await message.answer("⚠️ ID должен состоять только из цифр. Попробуйте снова:")
+        return
+
+    await state.update_data(courier_id=message.text.strip())
+    await state.set_state(RouteAdminStates.waiting_for_client_id)
+    await message.answer("🆔 Введите **ID или номер клиента** в системе (например: `client_001` или `123`):", parse_mode="Markdown")
+
+@dp.message(RouteAdminStates.waiting_for_client_id)
+async def process_route_client_id(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+    await state.update_data(client_id=message.text.strip())
+    await state.set_state(RouteAdminStates.waiting_for_client_name)
+    await message.answer("🏢 Введите **Имя клиента / название фирмы** (например: `ООО СуперОфис` или `Алишер ака`):")
+
+@dp.message(RouteAdminStates.waiting_for_client_name)
+async def process_route_client_name(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+    await state.update_data(client_name=message.text.strip())
+    await state.set_state(RouteAdminStates.waiting_for_address)
+    await message.answer("📍 Введите **адрес доставки** (например: `ул. Навои, дом 15, кв 4`):")
+
+@dp.message(RouteAdminStates.waiting_for_address)
+async def process_route_address(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+    await state.update_data(address=message.text.strip())
+    await state.set_state(RouteAdminStates.waiting_for_phone)
+    await message.answer("📞 Введите **номер телефона** клиента (например: `+998901234567`):")
+
+@dp.message(RouteAdminStates.waiting_for_phone)
+async def process_route_phone(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+    await state.update_data(phone=message.text.strip())
+    await state.set_state(RouteAdminStates.waiting_for_planned)
+    await message.answer("💧 Введите **план: сколько полных бутылей (19л)** привезти (только число, например: `5`):")
+
+@dp.message(RouteAdminStates.waiting_for_planned)
+async def process_route_planned(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+    if not message.text.isdigit():
+        await message.answer("⚠️ Введите число бутылей цифрами:")
+        return
+
+    await state.update_data(planned_delivered=int(message.text.strip()))
+    await state.set_state(RouteAdminStates.waiting_for_task_type)
+
+    markup = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🚚 Доставка (delivery)")],
+            [KeyboardButton(text="🔄 Расторжение (termination)"), KeyboardButton(text="🧼 Чистка кулера (service)")],
+            [KeyboardButton(text="🔙 Главное меню")]
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("⚙️ Выберите **тип задачи** для этой точки:", reply_markup=markup, parse_mode="Markdown")
+
+@dp.message(RouteAdminStates.waiting_for_task_type)
+async def process_route_task_type(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+
+    task_map = {
+        "🚚 Доставка (delivery)": "delivery",
+        "🔄 Расторжение (termination)": "termination",
+        "🧼 Чистка кулера (service)": "service"
+    }
+    task_type = task_map.get(message.text, "delivery")
+    data = await state.get_data()
+
+    today_str = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
+    route_record = {
+        "date": today_str,
+        "courier_id": data.get("courier_id"),
+        "client_id": data.get("client_id"),
+        "client_name": data.get("client_name"),
+        "address": data.get("address"),
+        "phone": data.get("phone"),
+        "planned_delivered": data.get("planned_delivered"),
+        "task_type": task_type,
+        "status": "pending"
+    }
+
+    try:
+        supabase.table("daily_routes").insert(route_record).execute()
+        await message.answer(
+            f"✅ **Точка успешно добавлена в маршрут курьеру!**\n\n"
+            f"👤 Курьер ID: `{data.get('courier_id')}`\n"
+            f"🏢 Клиент: {data.get('client_name')} (ID: {data.get('client_id')})\n"
+            f"📍 Адрес: {data.get('address')}\n"
+            f"💧 План: {data.get('planned_delivered')} шт.\n"
+            f"⚙️ Тип: {task_type}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.error(f"Ошибка сохранения маршрута через бота: {e}")
+        await message.answer(f"⚠️ Ошибка при сохранении в базу данных: {e}")
+
+    await state.clear()
+    await cmd_start(message)
+
 @dp.message(F.text == "🔙 Главное меню")
 async def back_to_main_menu(message: types.Message, state: FSMContext):
     await state.clear()
@@ -951,7 +1095,6 @@ async def main():
     await site.start()
     logging.info(f"Веб-сервер запущен на порту {PORT}")
 
-    # Запускаем только вебхук-сервер без conflict-ошибок polling
     await asyncio.Event().wait()
 
 if __name__ == "__main__":

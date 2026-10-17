@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from datetime import datetime, timedelta, timezone
 import aiohttp
 from aiogram import Bot, Dispatcher, F, types
@@ -25,7 +24,6 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 # Подключение к Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -58,10 +56,6 @@ class CourierStatStates(StatesGroup):
     waiting_for_period = State()
     waiting_for_action = State()
 
-class RouteAdminStates(StatesGroup):
-    waiting_for_courier_selection = State()
-    waiting_for_bulk_text = State()
-
 # --- Функции работы с Supabase ---
 def load_couriers():
     if not supabase:
@@ -77,6 +71,7 @@ def save_couriers_to_db(couriers_list):
     if not supabase:
         return
     try:
+        # Синхронизация: очищаем и записываем актуальный список
         supabase.table("couriers").delete().neq("user_id", 0).execute()
         if couriers_list:
             data_to_insert = [{"user_id": int(cid)} for cid in couriers_list]
@@ -94,84 +89,15 @@ def load_reports():
         logging.error(f"Ошибка чтения отчетов из Supabase: {e}")
         return []
 
-def get_or_create_client(client_id: str, client_name: str = ""):
+def save_report_to_db(report_data):
     if not supabase:
-        return {"bottle_balance": 0}
+        logging.error("Supabase не подключен, отчет не сохранен в БД!")
+        return
     try:
-        res = supabase.table("clients").select("*").eq("client_id", str(client_id)).execute()
-        if res.data:
-            return res.data[0]
-        else:
-            new_client = {
-                "client_id": str(client_id),
-                "name": client_name,
-                "bottle_balance": 0
-            }
-            supabase.table("clients").insert(new_client).execute()
-            return new_client
+        supabase.table("reports").insert(report_data).execute()
+        logging.info("Отчет успешно сохранен в Supabase!")
     except Exception as e:
-        logging.error(f"Ошибка при работе с клиентом: {e}")
-        return {"bottle_balance": 0}
-
-def get_courier_route(courier_id: int):
-    if not supabase:
-        return []
-    try:
-        today_str = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
-        response = supabase.table("daily_routes") \
-            .select("*") \
-            .eq("courier_id", str(courier_id)) \
-            .eq("date", today_str) \
-            .eq("status", "pending") \
-            .execute()
-        return response.data
-    except Exception as e:
-        logging.error(f"Ошибка получения маршрута: {e}")
-        return []
-
-def save_report_to_db_with_balance(data):
-    if not supabase:
-        return False, "Supabase не подключен"
-    
-    client_id = str(data.get("client_id"))
-    delivered = int(data.get("delivered", 0))
-    returned = int(data.get("returned", 0))
-    courier_id = str(data.get("user_id"))
-
-    client_info = get_or_create_client(client_id)
-    current_balance = client_info["bottle_balance"]
-
-    max_return_allowed = current_balance + delivered
-    if returned > max_return_allowed:
-        return False, f"Ошибка! У клиента на руках всего {current_balance} шт. Нельзя вернуть {returned} (максимум: {max_return_allowed})."
-
-    new_balance = current_balance + delivered - returned
-
-    try:
-        res = supabase.table("reports").insert(data).execute()
-        report_id = res.data[0]["id"] if res.data and "id" in res.data[0] else None
-
-        supabase.table("clients").update({"bottle_balance": new_balance}).eq("client_id", client_id).execute()
-
-        supabase.table("report_logs").insert({
-            "report_id": report_id,
-            "client_id": client_id,
-            "courier_id": courier_id,
-            "action": "create",
-            "new_delivered": delivered,
-            "new_returned": returned
-        }).execute()
-
-        supabase.table("daily_routes").update({"status": "completed"})\
-            .eq("courier_id", courier_id)\
-            .eq("client_id", client_id)\
-            .execute()
-
-        return True, new_balance
-    except Exception as e:
-        logging.error(f"Ошибка записи отчета и баланса в Supabase: {e}")
-        return False, str(e)
-
+        logging.error(f"Ошибка записи отчета в Supabase: {e}")
 
 # HTML Mini App
 HTML_CONTENT = """
@@ -180,7 +106,7 @@ HTML_CONTENT = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Маршрут курьера / Kuryer marshruti</title>
+    <title>Отчет курьера / Kuryer hisoboti</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
@@ -190,171 +116,223 @@ HTML_CONTENT = """
             margin: 0;
             padding: 16px;
         }
-        .container { max-width: 420px; margin: 0 auto; }
-        h2 { text-align: center; font-size: 20px; margin-bottom: 15px; }
-        .task-card {
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
             background: var(--tg-theme-secondary-bg-color, #ffffff);
-            padding: 14px; border-radius: 10px; margin-bottom: 10px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-            border-left: 5px solid #2481cc; cursor: pointer;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
         }
-        .task-card.completed { border-left-color: #16a34a; opacity: 0.6; }
-        .client-name { font-weight: 600; font-size: 16px; margin-bottom: 4px; }
-        .client-info { font-size: 13px; color: #6b7280; margin-bottom: 2px; }
-        .task-badge {
-            display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600;
-            border-radius: 4px; margin-top: 6px; background: #e0f2fe; color: #0369a1;
+        .lang-switcher {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 15px;
         }
-        #formModal {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5); justify-content: center; align-items: center;
-            padding: 16px; box-sizing: border-box;
+        .lang-switcher select {
+            width: auto;
+            padding: 4px 8px;
+            font-size: 14px;
         }
-        .modal-content {
-            background: var(--tg-theme-bg-color, #fff); padding: 20px; border-radius: 12px;
-            width: 100%; max-width: 380px; max-height: 90vh; overflow-y: auto;
+        h2 {
+            text-align: center;
+            font-size: 20px;
+            margin-bottom: 20px;
         }
-        .form-group { margin-bottom: 12px; }
-        label { display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500; }
+        .form-group {
+            margin-bottom: 14px;
+        }
+        label {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
         input, select {
-            width: 100%; padding: 10px; box-sizing: border-box;
-            border: 1px solid #ccc; border-radius: 8px; font-size: 15px;
-            background: var(--tg-theme-secondary-bg-color, #fff); color: var(--tg-theme-text-color, #000);
+            width: 100%;
+            padding: 10px 12px;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-size: 16px;
+            background: var(--tg-theme-bg-color, #fff);
+            color: var(--tg-theme-text-color, #000);
         }
         button {
-            width: 100%; background-color: var(--tg-theme-button-color, #2481cc);
-            color: var(--tg-theme-button-text-color, #fff); border: none;
-            padding: 12px; font-size: 15px; font-weight: 600; border-radius: 8px;
-            cursor: pointer; margin-top: 10px;
+            width: 100%;
+            background-color: var(--tg-theme-button-color, #2481cc);
+            color: var(--tg-theme-button-text-color, #fff);
+            border: none;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
         }
-        .close-btn { background-color: #6b7280; margin-top: 6px; }
+        button:disabled {
+            background-color: #d1d5db;
+            color: #9ca3af;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>📍 Ваш маршрут на сегодня</h2>
-        <div id="routeList">Загрузка маршрута...</div>
-    </div>
-
-    <div id="formModal">
-        <div class="modal-content">
-            <h3 id="modalTitle" style="margin-top:0; font-size:18px;">Сдача точки</h3>
-            <form id="reportForm">
-                <input type="hidden" id="modalClientId">
-                <input type="hidden" id="modalTaskType">
-                <div class="form-group">
-                    <label>Сдал полных (19л):</label>
-                    <input type="number" id="delivered" min="0" required>
-                </div>
-                <div class="form-group">
-                    <label>Принял пустых (19л):</label>
-                    <input type="number" id="returned" min="0" required>
-                </div>
-                <div class="form-group">
-                    <label>Тип оплаты:</label>
-                    <select id="paymentType">
-                        <option value="Наличные">Наличные</option>
-                        <option value="Click/Payme">Click/Payme</option>
-                        <option value="Перечисление">Перечисление</option>
-                        <option value="Предоплата">Предоплата</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Сумма (сум):</label>
-                    <input type="number" id="totalPrice" min="0" required>
-                </div>
-                <button type="submit" id="submitBtn">Сохранить отчёт</button>
-                <button type="button" class="close-btn" onclick="closeModal()">Отмена</button>
-            </form>
+        <div class="lang-switcher">
+            <select id="langSelect">
+                <option value="uz">🇺🇿 O'zbekcha</option>
+                <option value="ru" selected>🇷🇺 Русский</option>
+            </select>
         </div>
+        
+        <h2 id="t_title">💧 Отчет по доставке</h2>
+        <form id="reportForm">
+            <div class="form-group">
+                <label id="t_clientId" for="clientId">ID абонента / Фирма:</label>
+                <input type="text" id="clientId" required placeholder="Введите ID или название">
+            </div>
+            <div class="form-group">
+                <label id="t_delivered" for="delivered">Сдал полных (19л):</label>
+                <input type="number" id="delivered" min="0" placeholder="0" required>
+            </div>
+            <div class="form-group">
+                <label id="t_returned" for="returned">Принял пустых (19л):</label>
+                <input type="number" id="returned" min="0" placeholder="0" required>
+            </div>
+            <div class="form-group">
+                <label id="t_clientType" for="clientType">Тип клиента:</label>
+                <select id="clientType">
+                    <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
+                    <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label id="t_paymentType" for="paymentType">Тип оплаты:</label>
+                <select id="paymentType">
+                    <option value="Наличные" id="opt_cash">Наличные</option>
+                    <option value="Click/Payme">Click/Payme</option>
+                    <option value="Перечисление" id="opt_bank">Перечисление</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label id="t_totalPrice" for="totalPrice">Сумма (сум):</label>
+                <input type="number" id="totalPrice" min="0" placeholder="0" required>
+            </div>
+            <button type="submit" id="submitBtn" disabled>Отправить отчет</button>
+        </form>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
         const PRICE_PER_BOTTLE = 23000;
-        const tgUser = tg.initDataUnsafe?.user;
-        const courierId = tgUser ? tgUser.id : null;
 
-        async function loadRoute() {
-            const listDiv = document.getElementById('routeList');
-            if (!courierId) {
-                listDiv.innerHTML = "⚠️ Не удалось определить ID курьера.";
-                return;
+        const translations = {
+            ru: {
+                title: "💧 Отчет по доставке",
+                clientId: "ID абонента / Фирма:",
+                clientIdPlaceholder: "Введите ID или название",
+                delivered: "Сдал полных (19л):",
+                returned: "Принял пустых (19л):",
+                clientType: "Тип клиента:",
+                jur: "Юр. лицо",
+                phys: "Физ. лицо",
+                paymentType: "Тип оплаты:",
+                cash: "Наличные",
+                bank: "Перечисление",
+                totalPrice: "Сумма (сум):",
+                submit: "Отправить отчет"
+            },
+            uz: {
+                title: "💧 Yetkazib berish hisoboti",
+                clientId: "Abonent ID / Firma:",
+                clientIdPlaceholder: "ID yoki nomini kiriting",
+                delivered: "To'liq topshirildi (19l):",
+                returned: "Bo'sh qabul qilindi (19l):",
+                clientType: "Mijoz turi:",
+                jur: "Yuridik shaxs",
+                phys: "Jismoniy shaxs",
+                paymentType: "To'lov turi:",
+                cash: "Naqd pul",
+                bank: "Pul o'tkazmasi",
+                totalPrice: "Summa (so'm):",
+                submit: "Hisobotni yuborish"
             }
+        };
 
-            try {
-                const response = await fetch(`/api/route?courier_id=${courierId}`);
-                const routes = await response.json();
+        const langSelect = document.getElementById('langSelect');
+        const t_title = document.getElementById('t_title');
+        const t_clientId = document.getElementById('t_clientId');
+        const clientIdInput = document.getElementById('clientId');
+        const t_delivered = document.getElementById('t_delivered');
+        const t_returned = document.getElementById('t_returned');
+        const t_clientType = document.getElementById('t_clientType');
+        const opt_jur = document.getElementById('opt_jur');
+        const opt_phys = document.getElementById('opt_phys');
+        const t_paymentType = document.getElementById('t_paymentType');
+        const opt_cash = document.getElementById('opt_cash');
+        const opt_bank = document.getElementById('opt_bank');
+        const t_totalPrice = document.getElementById('t_totalPrice');
+        const deliveredInput = document.getElementById('delivered');
+        const returnedInput = document.getElementById('returned');
+        const totalPriceInput = document.getElementById('totalPrice');
+        const submitBtn = document.getElementById('submitBtn');
 
-                if (!routes || routes.length === 0) {
-                    listDiv.innerHTML = "📭 На сегодня активных задач в маршруте нет.";
-                    return;
-                }
-
-                listDiv.innerHTML = "";
-                routes.forEach(task => {
-                    const card = document.createElement('div');
-                    card.className = `task-card ${task.status === 'completed' ? 'completed' : ''}`;
-                    
-                    let taskTypeText = "🚚 Доставка";
-                    if (task.task_type === 'termination') taskTypeText = "🔄 Расторжение";
-                    if (task.task_type === 'service') taskTypeText = "🧼 Чистка кулера";
-
-                    card.innerHTML = `
-                        <div class="client-name">${task.client_name || 'Клиент #' + task.client_id}</div>
-                        <div class="client-info">📍 ${task.address || 'Адрес не указан'}</div>
-                        <div class="client-info">📞 ${task.phone || 'Нет телефона'}</div>
-                        <div class="client-info"><b>План:</b> ${task.planned_delivered} шт. водички</div>
-                        <span class="task-badge">${taskTypeText}</span>
-                    `;
-
-                    if (task.status !== 'completed') {
-                        card.onclick = () => openModal(task);
-                    }
-                    listDiv.appendChild(card);
-                });
-            } catch (e) {
-                listDiv.innerHTML = "⚠️ Ошибка загрузки маршрута с сервера.";
-            }
-        }
-
-        function openModal(task) {
-            document.getElementById('modalClientId').value = task.client_id;
-            document.getElementById('modalTaskType').value = task.task_type || 'delivery';
-            document.getElementById('modalTitle').innerText = `Клиент: ${task.client_name || task.client_id}`;
-            document.getElementById('delivered').value = task.planned_delivered || 0;
-            document.getElementById('returned').value = 0;
-            document.getElementById('totalPrice').value = (task.planned_delivered || 0) * PRICE_PER_BOTTLE;
-            document.getElementById('formModal').style.display = 'flex';
-        }
-
-        function closeModal() {
-            document.getElementById('formModal').style.display = 'none';
-        }
-
-        document.getElementById('delivered').addEventListener('input', function() {
-            const count = parseInt(this.value) || 0;
-            document.getElementById('totalPrice').value = count * PRICE_PER_BOTTLE;
+        langSelect.addEventListener('change', function() {
+            setLanguage(this.value);
         });
+
+        function setLanguage(lang) {
+            const t = translations[lang];
+            t_title.innerText = t.title;
+            t_clientId.innerText = t.clientId;
+            clientIdInput.placeholder = t.clientIdPlaceholder;
+            t_delivered.innerText = t.delivered;
+            t_returned.innerText = t.returned;
+            t_clientType.innerText = t.clientType;
+            opt_jur.innerText = t.jur;
+            opt_phys.innerText = t.phys;
+            t_paymentType.innerText = t.paymentType;
+            opt_cash.innerText = t.cash;
+            opt_bank.innerText = t.bank;
+            t_totalPrice.innerText = t.totalPrice;
+            submitBtn.innerText = t.submit;
+        }
+
+        function validateForm() {
+            if (clientIdInput.value.trim() !== "" && deliveredInput.value.trim() !== "" && returnedInput.value.trim() !== "") {
+                submitBtn.removeAttribute('disabled');
+            } else {
+                submitBtn.setAttribute('disabled', 'true');
+            }
+        }
+
+        deliveredInput.addEventListener('input', function() {
+            const count = parseInt(deliveredInput.value) || 0;
+            totalPriceInput.value = count * PRICE_PER_BOTTLE;
+            validateForm();
+        });
+
+        clientIdInput.addEventListener('input', validateForm);
+        returnedInput.addEventListener('input', validateForm);
 
         document.getElementById('reportForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const submitBtn = document.getElementById('submitBtn');
             submitBtn.disabled = true;
-            submitBtn.innerText = "Сохранение...";
+            submitBtn.innerText = "Отправка...";
 
+            const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
             const data = {
-                user_id: courierId,
+                user_id: tgUser ? tgUser.id : null,
                 user_name: tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : "Курьер",
                 username: tgUser ? (tgUser.username || "нет_юзернейма") : "нет_юзернейма",
-                client_id: document.getElementById('modalClientId').value,
-                task_type: document.getElementById('modalTaskType').value,
-                delivered: document.getElementById('delivered').value,
-                returned: document.getElementById('returned').value,
+                client_id: clientIdInput.value,
+                delivered: deliveredInput.value,
+                returned: returnedInput.value,
+                client_type: document.getElementById('clientType').value,
                 payment_type: document.getElementById('paymentType').value,
-                total_price: document.getElementById('totalPrice').value,
-                client_type: "Физ. лицо"
+                total_price: totalPriceInput.value
             };
 
             try {
@@ -364,22 +342,19 @@ HTML_CONTENT = """
                     body: JSON.stringify(data)
                 });
                 const resData = await response.json();
-                
                 if (response.ok && resData.status === "ok") {
-                    closeModal();
-                    loadRoute();
+                    tg.close();
                 } else {
-                    alert("Ошибка: " + (resData.message || "Попробуйте снова"));
+                    alert("Ошибка отправки: " + (resData.message || "Попробуйте снова"));
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "Отправить отчет";
                 }
             } catch (err) {
                 alert("Ошибка соединения с сервером.");
-            } finally {
                 submitBtn.disabled = false;
-                submitBtn.innerText = "Сохранить отчёт";
+                submitBtn.innerText = "Отправить отчет";
             }
         });
-
-        loadRoute();
     </script>
 </body>
 </html>
@@ -422,7 +397,6 @@ async def handle_api_report(request):
         client_type = str(data.get("client_type", "Физ. лицо"))
         payment_type = str(data.get("payment_type", "Наличные"))
         total_price = int(data.get("total_price", 0))
-        task_type = str(data.get("task_type", "delivery"))
         
         raw_name = str(data.get("user_name", "Курьер"))
         raw_username = str(data.get("username", "нет_юзернейма"))
@@ -442,25 +416,19 @@ async def handle_api_report(request):
             "client_type": client_type,
             "payment_type": payment_type,
             "total_price": total_price,
-            "earnings": courier_earnings,
-            "task_type": task_type
+            "earnings": courier_earnings
         }
+        save_report_to_db(report_record)
 
-        success, result_msg = save_report_to_db_with_balance(report_record)
-        if not success:
-            return web.json_response({"status": "error", "message": result_msg}, status=400)
-
-        new_bottle_balance = result_msg
         formatted_price = f"{total_price:,}".replace(",", " ")
         formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
         
         report_text = (
-            f"📋 ОТЧЕТ О ДОСТАВКЕ ({task_type.upper()})\n\n"
+            f"📋 ОТЧЕТ О ДОСТАВКЕ (19л)\n\n"
             f"👤 Курьер: {raw_name} (@{raw_username})\n"
             f"🆔 ID / Фирма: {client_id}\n"
             f"💧 Сдал полных (19л): {delivered} шт.\n"
             f"🔄 Принял пустых (19л): {returned} шт.\n"
-            f"📦 Остаток тары у клиента: {new_bottle_balance} шт.\n"
             f"👥 Тип клиента: {client_type}\n"
             f"💳 Тип оплаты: {payment_type}\n"
             f"💰 Сумма заказа: {formatted_price} сум\n"
@@ -485,13 +453,7 @@ async def handle_api_report(request):
         logging.error(f"Ошибка сохранения отчета: {e}", exc_info=True)
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-async def api_get_route(request):
-    courier_id = request.rel_url.query.get("courier_id")
-    if not courier_id:
-        return web.json_response([], status=400)
-    routes = get_courier_route(int(courier_id))
-    return web.json_response(routes)
-
+# ОБЩИЙ СВОДНЫЙ ОТЧЕТ
 async def send_summary_report(target_message: types.Message):
     try:
         today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
@@ -575,6 +537,7 @@ async def send_summary_report(target_message: types.Message):
         logging.error(f"Ошибка сводки: {e}", exc_info=True)
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
+# ОТЧЕТ ПО КУРЬЕРУ ЗА ВЫБРАННЫЙ ПЕРИОД (ИТОГОВЫЙ)
 async def send_single_courier_period_report(target_message: types.Message, target_id: str, days: int = 1):
     try:
         now = datetime.now(UZ_TIMEZONE)
@@ -582,8 +545,14 @@ async def send_single_courier_period_report(target_message: types.Message, targe
         cutoff = now - timedelta(days=days)
         reports = load_reports()
 
-        phys_deliv, jur_deliv, total_returned, total_revenue, total_earnings, orders_count = 0, 0, 0, 0, 0, 0
-        c_name, c_username = "Курьер", "нет_юзернейма"
+        phys_deliv = 0
+        jur_deliv = 0
+        total_returned = 0
+        total_revenue = 0
+        total_earnings = 0
+        orders_count = 0
+        c_name = "Курьер"
+        c_username = "нет_юзернейма"
 
         for r in reports:
             if str(r.get("courier_id", "")) == str(target_id):
@@ -594,9 +563,11 @@ async def send_single_courier_period_report(target_message: types.Message, targe
                     continue
 
                 if days == 1:
-                    if not r_date_str.startswith(today_date_str): continue
+                    if not r_date_str.startswith(today_date_str):
+                        continue
                 else:
-                    if r_date < cutoff: continue
+                    if r_date < cutoff:
+                        continue
 
                 c_name = r.get("courier_name", c_name)
                 c_username = r.get("courier_username", c_username)
@@ -606,8 +577,10 @@ async def send_single_courier_period_report(target_message: types.Message, targe
                 rev = int(r.get("total_price", 0) or 0)
                 earn = int(r.get("earnings", 0) or 0)
 
-                if "Юр" in ctype: jur_deliv += deliv
-                else: phys_deliv += deliv
+                if "Юр" in ctype:
+                    jur_deliv += deliv
+                else:
+                    phys_deliv += deliv
 
                 total_returned += ret
                 total_revenue += rev
@@ -615,6 +588,7 @@ async def send_single_courier_period_report(target_message: types.Message, targe
                 orders_count += 1
 
         period_title = f"ЗА СЕГОДНЯ ({today_date_str})" if days == 1 else f"ЗА ПОСЛЕДНИЕ 7 ДНЕЙ"
+
         if orders_count == 0:
             await target_message.answer(f"📭 У курьера {c_name} нет заказов {period_title.lower()}.")
             return
@@ -640,6 +614,7 @@ async def send_single_courier_period_report(target_message: types.Message, targe
         logging.error(f"Ошибка отчета курьера: {e}")
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
+# ПОДРОБНЫЙ СПИСОК ВСЕХ ЗАКАЗОВ КУРЬЕРА ЗА ПЕРИОД
 async def send_courier_detailed_orders(target_message: types.Message, target_id: str, days: int = 1):
     try:
         now = datetime.now(UZ_TIMEZONE)
@@ -659,9 +634,11 @@ async def send_courier_detailed_orders(target_message: types.Message, target_id:
                     continue
 
                 if days == 1:
-                    if not r_date_str.startswith(today_date_str): continue
+                    if not r_date_str.startswith(today_date_str):
+                        continue
                 else:
-                    if r_date < cutoff: continue
+                    if r_date < cutoff:
+                        continue
                 matched_orders.append(r)
 
         if not matched_orders:
@@ -703,36 +680,7 @@ async def send_courier_detailed_orders(target_message: types.Message, target_id:
         logging.error(f"Ошибка детального списка заказов: {e}")
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# --- ТЕКСТОВОЕ МЕНЮ И КОМАНДЫ ---
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    couriers = load_couriers()
-    
-    if couriers and user_id not in couriers and (not ADMIN_IDS or user_id not in ADMIN_IDS):
-        await message.answer("⛔ У вас нет доступа к системе курьеров. Обратитесь к администратору.")
-        return
-
-    is_admin = ADMIN_IDS and user_id in ADMIN_IDS
-
-    if is_admin:
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="📊 Сводка за сегодня"), KeyboardButton(text="🚚 Статистика по курьерам")],
-                [KeyboardButton(text="📋 Отправить маршрут списком"), KeyboardButton(text="🔙 Главное меню")]
-            ],
-            resize_keyboard=True
-        )
-        await message.answer("👋 Добро пожаловать, администратор!", reply_markup=keyboard)
-    else:
-        web_app_url = f"{WEB_SERVER_HOST}/"
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="📱 Открыть маршрут", web_app=WebAppInfo(url=web_app_url))]
-            ]
-        )
-        await message.answer("👋 Здравствуйте! Нажмите кнопку ниже, чтобы открыть ваш ежедневный маршрут и отправить отчёт.", reply_markup=keyboard)
-
+# ТЕКСТОВОЕ МЕНЮ
 @dp.message(F.text == "📊 Сводка за сегодня")
 async def cmd_summary(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -824,125 +772,12 @@ async def handle_courier_action(message: types.Message, state: FSMContext):
     else:
         await send_courier_detailed_orders(message, target_id, days)
 
-# --- АДМИНКА: МАССОВАЯ ЗАГРУЗКА МАРШРУТА ИЗ ВАШЕГО ТЕКСТА ---
-
-@dp.message(F.text == "📋 Отправить маршрут списком")
-async def start_bulk_route(message: types.Message, state: FSMContext):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ Нет прав.")
-        return
-
-    couriers = load_couriers()
-    if not couriers:
-        await message.answer("⚠️ В базе данных пока нет ни одного сохраненного курьера (`couriers`). Сначала добавьте курьера через `/add ID`.")
-        return
-
-    # Создаем инлайн-кнопки с действующими курьерами
-    keyboard_buttons = []
-    for cid in couriers:
-        keyboard_buttons.append([InlineKeyboardButton(text=f"👤 Курьер ID: {cid}", callback_data=f"select_courier_{cid}")])
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-    await message.answer("👥 Выберите курьера, которому хотите отправить этот список маршрута:", reply_markup=markup)
-    await state.set_state(RouteAdminStates.waiting_for_courier_selection)
-
-@dp.callback_query(RouteAdminStates.waiting_for_courier_selection, F.data.startswith("select_courier_"))
-async def courier_selected_callback(callback: types.CallbackQuery, state: FSMContext):
-    courier_id = callback.data.replace("select_courier_", "")
-    await state.update_data(target_courier_id=courier_id)
-    await state.set_state(RouteAdminStates.waiting_for_bulk_text)
-
-    await callback.message.edit_text(
-        f"✅ Выбран курьер ID: `{courier_id}`\n\n"
-        f"📝 Теперь **отправьте или вставьте весь ваш текст маршрута** одним сообщением (с номерами, адресами, телефонами и количеством бутылей). Бот сам автоматически разобьет его на задачи!",
-        parse_mode="Markdown"
-    )
-    await callback.answer()
-
-@dp.message(RouteAdminStates.waiting_for_bulk_text)
-async def process_bulk_route_text(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    courier_id = data.get("target_courier_id")
-    raw_text = message.text
-
-    if not courier_id:
-        await message.answer("⚠️ Ошибка: курьер не выбран. Начните заново.")
-        await state.clear()
-        return
-
-    # Парсим текст по строкам, начинающимся с цифры и точки (например, "1.", "2.", ...)
-    lines = raw_text.split("\n")
-    tasks_to_add = []
-    current_task_lines = []
-
-    for line in lines:
-        # Проверяем, начинается ли строка с номера пункта (например, "1.", "12.")
-        if re.match(r"^\d+[\.\)]", line.strip()):
-            if current_task_lines:
-                tasks_to_add.append("\n".join(current_task_lines))
-                current_task_lines = []
-        current_task_lines.append(line)
-    
-    if current_task_lines:
-        tasks_to_add.append("\n".join(current_task_lines))
-
-    today_str = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
-    added_count = 0
-
-    for task_text in tasks_to_add:
-        lines_in_task = task_text.strip().split("\n")
-        first_line = lines_in_task[0] if lines_in_task else ""
-        full_block = " ".join(lines_in_task)
-
-        # 1. Ищем ID клиента (первое число в первой строке)
-        client_id_match = re.search(r"^(\d+)", first_line.strip())
-        client_id = client_id_match.group(1) if client_id_match else f"client_{added_count+1}"
-
-        # 2. Ищем количество бутылей (например, "50К", "5к", "2к")
-        planned_match = re.search(r"(\d+)\s*[кКкВштШТ]+", full_block)
-        planned_delivered = int(planned_match.group(1)) if planned_match else 1
-
-        # 3. Ищем телефоны (номера от 7-12 цифр)
-        phones = re.findall(r"(?:\+?998)?\d{9}", full_block)
-        phone = phones[0] if phones else "Нет телефона"
-
-        # 4. Формируем название клиента и адрес из текста
-        client_name = first_line.split("адрес:")[0].split("ул.")[0].strip()
-        address = full_block[:150] # Берем срез под адрес
-
-        route_record = {
-            "date": today_str,
-            "courier_id": str(courier_id),
-            "client_id": str(client_id),
-            "client_name": client_name[:100],
-            "address": address,
-            "phone": phone,
-            "planned_delivered": planned_delivered,
-            "task_type": "delivery",
-            "status": "pending"
-        }
-
-        try:
-            supabase.table("daily_routes").insert(route_record).execute()
-            added_count += 1
-        except Exception as e:
-            logging.error(f"Ошибка сохранения пункта маршрута: {e}")
-
-    await message.answer(
-        f"✅ **Маршрут успешно разобран и сохранен!**\n\n"
-        f"👤 Курьер ID: `{courier_id}`\n"
-        f"📦 Успешно добавлено точек в базу: **{added_count} шт.**\n\n"
-        f"Теперь курьер может открыть свой Mini App и увидеть этот маршрут.",
-        parse_mode="Markdown"
-    )
-    await state.clear()
-    await cmd_start(message)
-
 @dp.message(F.text == "🔙 Главное меню")
 async def back_to_main_menu(message: types.Message, state: FSMContext):
     await state.clear()
     await cmd_start(message)
 
+# Команды управления
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -968,7 +803,7 @@ async def cmd_remove_courier(message: types.Message):
         return
     args = message.text.split()
     if len(args) < 2 or not args[1].isdigit():
-        await message.answer("⚠️ Использование: `/remove ТЕЛЕГRAМ_ID`", parse_mode="Markdown")
+        await message.answer("⚠️ Использование: `/remove ТЕЛЕГРАМ_ID`", parse_mode="Markdown")
         return
     target_id = int(args[1])
     couriers = load_couriers()
@@ -977,30 +812,111 @@ async def cmd_remove_courier(message: types.Message):
         save_couriers_to_db(couriers)
         await message.answer(f"🗑 Курьер с ID `{target_id}` удален из базы.", parse_mode="Markdown")
     else:
-        await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе.", parse_mode="Markdown")
+        await message.answer(f"⚠️ Курьер не найден.", parse_mode="Markdown")
 
-# Запуск aiohttp сервера и вебхуков
-async def on_startup(bot: Bot):
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
+@dp.message(Command("list"))
+async def cmd_list_couriers(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+    couriers = load_couriers()
+    if not couriers:
+        await message.answer("📭 Список курьеров пуст.")
+    else:
+        text = "📋 **Список курьеров в базе (ID):**\n\n" + "\n".join([f"• `{cid}`" for cid in couriers])
+        await message.answer(text, parse_mode="Markdown")
+
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    couriers = load_couriers()
+    if couriers and user_id not in couriers:
+        if not (ADMIN_IDS and user_id in ADMIN_IDS):
+            await message.answer(f"⛔️ Нет доступа. Ваш ID: `{user_id}`", parse_mode="Markdown")
+            return
+
+    buttons = [
+        [KeyboardButton(text="📊 Сводка за сегодня")],
+        [KeyboardButton(text="🚚 Статистика по курьерам")],
+        [KeyboardButton(text="💰 Мой заработок за сегодня")],
+        [KeyboardButton(text="📦 Открыть отчет / Hisobotni ochish")]
+    ]
+    
+    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📦 Заполнить отчет (Mini App)", web_app=WebAppInfo(url=WEB_SERVER_HOST))]
+        ]
+    )
+    
+    await message.answer("👋 Добро пожаловать! Используйте меню ниже:", reply_markup=keyboard)
+    await message.answer("Главное меню:", reply_markup=markup)
+
+@dp.message(F.text == "📦 Открыть отчет / Hisobotni ochish")
+async def open_report_btn(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📦 Заполнить отчет (Mini App)", web_app=WebAppInfo(url=WEB_SERVER_HOST))]
+        ]
+    )
+    await message.answer("Нажмите кнопку ниже для открытия формы:", reply_markup=keyboard)
+
+@dp.message(F.text == "💰 Мой заработок за сегодня")
+async def check_today_earnings(message: types.Message):
+    user_id = message.from_user.id
+    today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
+    reports = load_reports()
+    total_earned, total_delivered, orders_count = 0, 0, 0
+
+    for r in reports:
+        if str(r.get("courier_id", "")) == str(user_id) and str(r.get("date", "")).startswith(today_date):
+            total_earned += int(r.get("earnings", 0) or 0)
+            total_delivered += int(r.get("delivered", 0) or 0)
+            orders_count += 1
+
+    formatted_earnings = f"{total_earned:,}".replace(",", " ")
+    await message.answer(
+        f"📊 **Ваша статистика за сегодня ({today_date}):**\n\n"
+        f"📦 Успешных заказов: **{orders_count}**\n"
+        f"💧 Доставлено бутылей (19л): **{total_delivered} шт.**\n"
+        f"💵 **Заработано за сегодня:** `{formatted_earnings} сум`",
+        parse_mode="Markdown"
+    )
 
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/api/route", api_get_route)
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
     app.router.add_post("/api/report", handle_api_report)
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
 
-    dp.startup.register(on_startup)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_webhook(url=WEBHOOK_URL)
+    except Exception as e:
+        logging.error(f"Ошибка вебхука: {e}")
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logging.info(f"Веб-сервер запущен на порту {PORT}")
 
+    async def ping_loop():
+        await asyncio.sleep(10)
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    async with session.get(f"{WEB_SERVER_HOST}/health") as resp:
+                        pass
+                except Exception:
+                    pass
+                await asyncio.sleep(300)
+
+    asyncio.create_task(ping_loop())
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Бот остановлен.")

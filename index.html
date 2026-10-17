@@ -1,247 +1,154 @@
-HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Маршрут курьера / Kuryer marshruti</title>
+    <title>Отчет курьера</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--tg-theme-bg-color, #f4f4f5);
-            color: var(--tg-theme-text-color, #000);
+            background-color: var(--tg-theme-bg-color, #f4f4f9);
+            color: var(--tg-theme-text-color, #333);
             margin: 0;
-            padding: 16px;
-        }
-        .container {
-            max-width: 420px;
-            margin: 0 auto;
-        }
-        h2 {
-            text-align: center;
-            font-size: 20px;
-            margin-bottom: 15px;
-        }
-        .task-card {
-            background: var(--tg-theme-secondary-bg-color, #ffffff);
-            padding: 14px;
-            border-radius: 10px;
-            margin-bottom: 10px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-            border-left: 5px solid #2481cc;
-            cursor: pointer;
-        }
-        .task-card.completed {
-            border-left-color: #16a34a;
-            opacity: 0.6;
-        }
-        .client-name {
-            font-weight: 600;
-            font-size: 16px;
-            margin-bottom: 4px;
-        }
-        .client-info {
-            font-size: 13px;
-            color: #6b7280;
-            margin-bottom: 2px;
-        }
-        .task-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            font-size: 11px;
-            font-weight: 600;
-            border-radius: 4px;
-            margin-top: 6px;
-            background: #e0f2fe;
-            color: #0369a1;
-        }
-        /* Модальное окно формы сдачи */
-        #formModal {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5);
-            justify-content: center;
-            align-items: center;
             padding: 16px;
             box-sizing: border-box;
         }
-        .modal-content {
-            background: var(--tg-theme-bg-color, #fff);
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: var(--tg-theme-secondary-bg-color, #ffffff);
             padding: 20px;
-            border-radius: 12px;
-            width: 100%;
-            max-width: 380px;
-            max-height: 90vh;
-            overflow-y: auto;
+            border-radius: 14px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
-        .form-group { margin-bottom: 12px; }
-        label { display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500; }
+        h2 {
+            margin: 0 0 20px 0;
+            font-size: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            font-size: 14px;
+        }
         input, select {
-            width: 100%; padding: 10px; box-sizing: border-box;
-            border: 1px solid #ccc; border-radius: 8px; font-size: 15px;
-            background: var(--tg-theme-secondary-bg-color, #fff);
-            color: var(--tg-theme-text-color, #000);
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 16px;
         }
         button {
-            width: 100%; background-color: var(--tg-theme-button-color, #2481cc);
-            color: var(--tg-theme-button-text-color, #fff); border: none;
-            padding: 12px; font-size: 15px; font-weight: 600; border-radius: 8px;
-            cursor: pointer; margin-top: 10px;
+            width: 100%;
+            padding: 12px;
+            background-color: var(--tg-theme-button-color, #2481cc);
+            color: var(--tg-theme-button-text-color, #ffffff);
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 10px;
         }
-        .close-btn { background-color: #6b7280; margin-top: 6px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>📍 Ваш маршрут на сегодня</h2>
-        <div id="routeList">Загрузка маршрута...</div>
-    </div>
-
-    <!-- Модальное окно заполнения отчета по точке -->
-    <div id="formModal">
-        <div class="modal-content">
-            <h3 id="modalTitle" style="margin-top:0; font-size:18px;">Сдача точки</h3>
-            <form id="reportForm">
-                <input type="hidden" id="modalClientId">
-                <div class="form-group">
-                    <label id="lblDelivered">Сдал полных (19л):</label>
-                    <input type="number" id="delivered" min="0" required>
-                </div>
-                <div class="form-group">
-                    <label id="lblReturned">Принял пустых (19л):</label>
-                    <input type="number" id="returned" min="0" required>
-                </div>
-                <div class="form-group">
-                    <label>Тип оплаты:</label>
-                    <select id="paymentType">
-                        <option value="Наличные">Наличные</option>
-                        <option value="Click/Payme">Click/Payme</option>
-                        <option value="Перечисление">Перечисление</option>
-                        <option value="Предоплата">Предоплата</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Сумма (сум):</label>
-                    <input type="number" id="totalPrice" min="0" required>
-                </div>
-                <button type="submit" id="submitBtn">Сохранить отчёт</button>
-                <button type="button" class="close-btn" onclick="closeModal()">Отмена</button>
-            </form>
+        <h2>Отчет о доставке</h2>
+        
+        <div class="form-group">
+            <label for="clientId">ID абонента:</label>
+            <input type="text" id="clientId" placeholder="Введите ID клиента">
         </div>
+
+        <div class="form-group">
+            <label for="deliveredCount">Сдал полных (19л):</label>
+            <input type="number" id="deliveredCount" value="0" min="0" oninput="calculateTotal()">
+        </div>
+
+        <div class="form-group">
+            <label for="returnedCount">Принял пустых (19л):</label>
+            <input type="number" id="returnedCount" value="0" min="0">
+        </div>
+
+        <div class="form-group">
+            <label for="clientType">Тип клиента:</label>
+            <select id="clientType">
+                <option value="Физическое лицо">Физическое лицо</option>
+                <option value="Юридическое лицо">Юридическое лицо</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="paymentType">Тип оплаты:</label>
+            <select id="paymentType">
+                <option value="Наличные">Наличные</option>
+                <option value="Click / Payme">Click / Payme</option>
+                <option value="Перечисление">Перечисление</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="totalPrice">Сумма (сум):</label>
+            <input type="number" id="totalPrice" value="0" min="0">
+        </div>
+
+        <button onclick="sendReport()">Отправить отчет</button>
     </div>
 
     <script>
-        const tg = window.Telegram.WebApp;
+        let tg = window.Telegram.WebApp;
         tg.expand();
-        const PRICE_PER_BOTTLE = 23000;
-        const tgUser = tg.initDataUnsafe?.user;
-        const courierId = tgUser ? tgUser.id : null;
 
-        async function loadRoute() {
-            const listDiv = document.getElementById('routeList');
-            if (!courierId) {
-                listDiv.innerHTML = "⚠️ Не удалось определить ID курьера.";
+        // Автоподсчет суммы по 23 000 сум за 1 бутыль
+        function calculateTotal() {
+            const delivered = parseInt(document.getElementById('deliveredCount').value) || 0;
+            const pricePerBottle = 23000;
+            const totalPrice = delivered * pricePerBottle;
+            document.getElementById('totalPrice').value = totalPrice;
+        }
+
+        function sendReport() {
+            const data = {
+                client_id: document.getElementById('clientId').value,
+                delivered: document.getElementById('deliveredCount').value,
+                returned: document.getElementById('returnedCount').value,
+                client_type: document.getElementById('clientType').value,
+                payment_type: document.getElementById('paymentType').value,
+                total_price: document.getElementById('totalPrice').value
+            };
+
+            if (!data.client_id) {
+                alert('Пожалуйста, введите ID абонента!');
                 return;
             }
 
-            try {
-                const response = await fetch(`/api/route?courier_id=${courierId}`);
-                const routes = await response.json();
-
-                if (!routes || routes.length === 0) {
-                    listDiv.innerHTML = "📭 На сегодня активных задач в маршруте нет.";
-                    return;
-                }
-
-                listDiv.innerHTML = "";
-                routes.forEach(task => {
-                    const card = document.createElement('div');
-                    card.className = `task-card ${task.status === 'completed' ? 'completed' : ''}`;
-                    
-                    let taskTypeText = "🚚 Доставка";
-                    if (task.task_type === 'termination') taskTypeText = "🔄 Расторжение";
-                    if (task.task_type === 'service') taskTypeText = "🧼 Чистка кулера";
-
-                    card.innerHTML = `
-                        <div class="client-name">${task.client_name || 'Клиент #' + task.client_id}</div>
-                        <div class="client-info">📍 ${task.address || 'Адрес не указан'}</div>
-                        <div class="client-info">📞 ${task.phone || 'Нет телефона'}</div>
-                        <div class="client-info"><b>План:</b> ${task.planned_delivered} шт. водички</div>
-                        <span class="task-badge">${taskTypeText}</span>
-                    `;
-
-                    if (task.status !== 'completed') {
-                        card.onclick = () => openModal(task);
-                    }
-                    listDiv.appendChild(card);
-                });
-            } catch (e) {
-                listDiv.innerHTML = "⚠️ Ошибка загрузки маршрута с сервера.";
-            }
-        }
-
-        function openModal(task) {
-            document.getElementById('modalClientId').value = task.client_id;
-            document.getElementById('modalTitle').innerText = `Клиент: ${task.client_name || task.client_id}`;
-            document.getElementById('delivered').value = task.planned_delivered || 0;
-            document.getElementById('returned').value = 0;
-            document.getElementById('totalPrice').value = (task.planned_delivered || 0) * PRICE_PER_BOTTLE;
-            document.getElementById('formModal').style.display = 'flex';
-        }
-
-        function closeModal() {
-            document.getElementById('formModal').style.display = 'none';
-        }
-
-        document.getElementById('delivered').addEventListener('input', function() {
-            const count = parseInt(this.value) || 0;
-            document.getElementById('totalPrice').value = count * PRICE_PER_BOTTLE;
-        });
-
-        document.getElementById('reportForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            const submitBtn = document.getElementById('submitBtn');
-            submitBtn.disabled = true;
-            submitBtn.innerText = "Сохранение...";
-
-            const data = {
-                user_id: courierId,
-                user_name: tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : "Курьер",
-                username: tgUser ? (tgUser.username || "нет_юзернейма") : "нет_юзернейма",
-                client_id: document.getElementById('modalClientId').value,
-                delivered: document.getElementById('delivered').value,
-                returned: document.getElementById('returned').value,
-                payment_type: document.getElementById('paymentType').value,
-                total_price: document.getElementById('totalPrice').value,
-                client_type: "Физ. лицо"
-            };
-
-            try {
-                const response = await fetch('/api/report', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                const resData = await response.json();
-                
-                if (response.ok && resData.status === "ok") {
-                    closeModal();
-                    loadRoute(); // Перезагружаем маршрут, точка станет выполненной
+            fetch('/api/report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'ok') {
+                    alert('✅ Отчет успешно отправлен!');
+                    tg.close();
                 } else {
-                    alert("Ошибка: " + (resData.message || "Попробуйте снова"));
+                    alert('❌ Ошибка: ' + (result.message || 'не удалось отправить'));
                 }
-            } catch (err) {
-                alert("Ошибка соединения с сервером.");
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.innerText = "Сохранить отчёт";
-            }
-        });
-
-        loadRoute();
+            })
+            .catch(error => {
+                console.error('Ошибка:', error);
+                alert('❌ Сетевая ошибка при отправке');
+            });
+        }
     </script>
 </body>
 </html>
-"""

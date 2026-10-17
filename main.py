@@ -300,12 +300,12 @@ HTML_CONTENT = """
             submitBtn.disabled = true;
             submitBtn.innerText = "Отправка...";
 
-            const user = tg.initDataUnsafe?.user || {};
+            const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
 
             const data = {
-                user_id: user.id,
-                user_name: [user.first_name, user.last_name].filter(Boolean).join(" ") || "Курьер",
-                username: user.username || "нет_юзернейма",
+                user_id: tgUser ? tgUser.id : null,
+                user_name: tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : "Курьер",
+                username: tgUser ? (tgUser.username || "нет_юзернейма") : "нет_юзернейма",
                 client_id: clientIdInput.value,
                 delivered: deliveredInput.value,
                 returned: returnedInput.value,
@@ -321,15 +321,19 @@ HTML_CONTENT = """
                     body: JSON.stringify(data)
                 });
 
-                if (response.ok) {
+                const resData = await response.json();
+
+                if (response.ok && resData.status === "ok") {
                     tg.close();
                 } else {
-                    alert("Ошибка отправки! Попробуйте снова.");
+                    alert("Ошибка отправки: " + (resData.message || "Попробуйте снова"));
                     submitBtn.disabled = false;
+                    submitBtn.innerText = "Отправить отчет";
                 }
             } catch (err) {
                 alert("Ошибка соединения с сервером.");
                 submitBtn.disabled = false;
+                submitBtn.innerText = "Отправить отчет";
             }
         });
     </script>
@@ -360,10 +364,16 @@ async def handle_api_report(request):
         data = await request.json()
         sender_id = data.get("user_id")
         
+        if sender_id is not None:
+            try:
+                sender_id = int(sender_id)
+            except ValueError:
+                pass
+
         couriers = load_couriers()
-        if couriers and sender_id not in couriers:
+        if couriers and sender_id and (sender_id not in couriers):
             if not (ADMIN_IDS and sender_id in ADMIN_IDS):
-                return web.json_response({"status": "error", "message": "Access denied"}, status=403)
+                return web.json_response({"status": "error", "message": "У вас нет доступа (ID не найден в списке курьеров)"}, status=403)
 
         client_id = str(data.get("client_id", "Не указан"))
         delivered = int(data.get("delivered", 0))
@@ -372,8 +382,8 @@ async def handle_api_report(request):
         payment_type = str(data.get("payment_type", "Наличные"))
         total_price = int(data.get("total_price", 0))
         
-        courier_name = data.get("user_name", "Курьер")
-        courier_username = data.get("username", "нет_юзернейма")
+        raw_name = str(data.get("user_name", "Курьер"))
+        raw_username = str(data.get("username", "нет_юзернейма"))
         
         rate = BONUS_JURIDICAL if client_type == "Юр. лицо" else BONUS_PHYSICAL
         courier_earnings = delivered * rate
@@ -383,8 +393,8 @@ async def handle_api_report(request):
         report_record = {
             "date": current_datetime,
             "courier_id": sender_id,
-            "courier_name": courier_name,
-            "courier_username": courier_username,
+            "courier_name": raw_name,
+            "courier_username": raw_username,
             "client_id": client_id,
             "delivered": delivered,
             "returned": returned,
@@ -399,32 +409,35 @@ async def handle_api_report(request):
         formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
         
         report_text = (
-            f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
-            f"👤 **Курьер:** {courier_name} (@{courier_username})\n"
-            f"🆔 **ID / Фирма:** `{client_id}`\n"
-            f"💧 **Сдал полных (19л):** {delivered} шт.\n"
-            f"🔄 **Принял пустых (19л):** {returned} шт.\n"
-            f"👥 **Тип клиента:** {client_type}\n"
-            f"💳 **Тип оплаты:** {payment_type}\n"
-            f"💰 **Сумма заказа:** {formatted_price} сум\n"
-            f"💵 **Заработок курьера:** `{formatted_earnings} сум`"
+            f"📋 ОТЧЕТ О ДОСТАВКЕ (19л)\n\n"
+            f"👤 Курьер: {raw_name} (@{raw_username})\n"
+            f"🆔 ID / Фирма: {client_id}\n"
+            f"💧 Сдал полных (19л): {delivered} шт.\n"
+            f"🔄 Принял пустых (19л): {returned} шт.\n"
+            f"👥 Тип клиента: {client_type}\n"
+            f"💳 Тип оплаты: {payment_type}\n"
+            f"💰 Сумма заказа: {formatted_price} сум\n"
+            f"💵 Заработок курьера: {formatted_earnings} сум"
         )
 
-        # Отправляем курьеру в ЛС
+        # Отправляем курьеру в ЛС (обычный текст без parse_mode)
         if sender_id:
-            await bot.send_message(chat_id=sender_id, text=f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
+            try:
+                await bot.send_message(chat_id=sender_id, text=f"✅ Отчет успешно отправлен!\n\n{report_text}")
+            except Exception as e:
+                logging.error(f"Не удалось отправить сообщение курьеру {sender_id}: {e}")
 
-        # Отправляем в Канал
+        # Отправляем в Канал (обычный текст без parse_mode)
         if CHANNEL_ID:
             try:
                 target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
-                await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
+                await bot.send_message(chat_id=target_chat, text=report_text)
             except Exception as channel_err:
-                logging.error(f"Ошибка при отправке в канал CHANNEL_ID: {channel_err}")
+                logging.error(f"Ошибка при отправке в канал CHANNEL_ID ({CHANNEL_ID}): {channel_err}")
 
         return web.json_response({"status": "ok"})
     except Exception as e:
-        logging.error(f"Ошибка сохранения отчета: {e}")
+        logging.error(f"Ошибка сохранения отчета: {e}", exc_info=True)
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 

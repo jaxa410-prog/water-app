@@ -56,27 +56,49 @@ class CourierStatStates(StatesGroup):
     waiting_for_period = State()
     waiting_for_action = State()
 
+class CourierMyStatsStates(StatesGroup):
+    waiting_for_period = State()
+
+class AdminManageStates(StatesGroup):
+    waiting_for_add_data = State()
+    waiting_for_rename_data = State()
+    waiting_for_remove_id = State()
+
 # --- Функции работы с Supabase ---
 def load_couriers():
+    """Загружает список курьеров из базы (возвращает словарь {user_id: name})"""
     if not supabase:
-        return []
+        return {}
     try:
-        response = supabase.table("couriers").select("user_id").execute()
-        return [row["user_id"] for row in response.data]
+        response = supabase.table("couriers").select("user_id, name").execute()
+        couriers_dict = {}
+        for row in response.data:
+            uid = row.get("user_id")
+            name = row.get("name", "Курьер")
+            if uid:
+                couriers_dict[int(uid)] = name
+        return couriers_dict
     except Exception as e:
         logging.error(f"Ошибка загрузки курьеров из Supabase: {e}")
-        return []
+        return {}
 
-def save_couriers_to_db(couriers_list):
+def save_courier_to_db(user_id, name):
+    """Добавляет или обновляет курьера с именем в Supabase"""
     if not supabase:
         return
     try:
-        supabase.table("couriers").delete().neq("user_id", 0).execute()
-        if couriers_list:
-            data_to_insert = [{"user_id": int(cid)} for cid in couriers_list]
-            supabase.table("couriers").insert(data_to_insert).execute()
+        supabase.table("couriers").upsert({"user_id": int(user_id), "name": name}).execute()
     except Exception as e:
-        logging.error(f"Ошибка сохранения курьеров в Supabase: {e}")
+        logging.error(f"Ошибка сохранения курьера в Supabase: {e}")
+
+def remove_courier_from_db(user_id):
+    """Удаляет курьера из базы"""
+    if not supabase:
+        return
+    try:
+        supabase.table("couriers").delete().eq("user_id", int(user_id)).execute()
+    except Exception as e:
+        logging.error(f"Ошибка удаления курьера из Supabase: {e}")
 
 def load_reports():
     if not supabase:
@@ -397,7 +419,7 @@ async def handle_api_report(request):
         payment_type = str(data.get("payment_type", "Наличные"))
         total_price = int(data.get("total_price", 0))
         
-        raw_name = str(data.get("user_name", "Курьер"))
+        raw_name = couriers.get(sender_id, str(data.get("user_name", "Курьер")))
         raw_username = str(data.get("username", "нет_юзернейма"))
         
         rate = BONUS_JURIDICAL if "Юр" in client_type else BONUS_PHYSICAL
@@ -536,7 +558,79 @@ async def send_summary_report(target_message: types.Message):
         logging.error(f"Ошибка сводки: {e}", exc_info=True)
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ОТЧЕТ ПО КУРЬЕРУ ЗА ВЫБРАННЫЙ ПЕРИОД (ИТОГОВЫЙ)
+# ФУНКЦИЯ ЛИЧНОГО КАБИНЕТА КУРЬЕРА
+async def send_courier_personal_stats(target_message: types.Message, target_id: int, days: int = 1):
+    try:
+        now = datetime.now(UZ_TIMEZONE)
+        today_date_str = now.strftime("%Y-%m-%d")
+        cutoff = now - timedelta(days=days)
+        reports = load_reports()
+
+        phys_deliv = 0
+        jur_deliv = 0
+        total_returned = 0
+        total_earnings = 0
+        orders_count = 0
+
+        for r in reports:
+            if str(r.get("courier_id", "")) == str(target_id):
+                r_date_str = str(r.get("date", ""))
+                try:
+                    r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UZ_TIMEZONE)
+                except Exception:
+                    continue
+
+                if days == 1:
+                    if not r_date_str.startswith(today_date_str):
+                        continue
+                else:
+                    if r_date < cutoff:
+                        continue
+
+                deliv = int(r.get("delivered", 0) or 0)
+                ret = int(r.get("returned", 0) or 0)
+                ctype = str(r.get("client_type", "Физ. лицо"))
+                earn = int(r.get("earnings", 0) or 0)
+
+                if "Юр" in ctype:
+                    jur_deliv += deliv
+                else:
+                    phys_deliv += deliv
+
+                total_returned += ret
+                total_earnings += earn
+                orders_count += 1
+
+        if days == 1:
+            period_title = f"за сегодня ({today_date_str})"
+        elif days == 7:
+            period_title = "за последние 7 дней"
+        else:
+            period_title = "за последние 15 дней"
+
+        if orders_count == 0:
+            await target_message.answer(f"📭 У вас нет выполненных заказов {period_title}.")
+            return
+
+        total_deliv = phys_deliv + jur_deliv
+        earn_fmt = f"{total_earnings:,}".replace(",", " ")
+
+        text = (
+            f"👤 **ВАШ ЛИЧНЫЙ КАБИНЕТ (Моя зарплата)**\n"
+            f"📅 Период: {period_title}\n\n"
+            f"📦 Выполнено заказов: {orders_count}\n"
+            f"👤 Физ. лицам сдал: {phys_deliv} шт.\n"
+            f"🏢 Юр. лицам сдал: {jur_deliv} шт.\n"
+            f"💧 Всего сдано полных (19л): **{total_deliv} шт.**\n"
+            f"🔄 Всего собрано пустых: **{total_returned} шт.**\n\n"
+            f"💵 **Ваш итоговый заработок: {earn_fmt} сум**"
+        )
+        await target_message.answer(text, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Ошибка личного кабинета курьера: {e}")
+        await target_message.answer(f"⚠️ Ошибка получения статистики: {e}")
+
+# ОТЧЕТ ПО КУРЬЕРУ (ДЛЯ АДМИНА)
 async def send_single_courier_period_report(target_message: types.Message, target_id: str, days: int = 1):
     try:
         now = datetime.now(UZ_TIMEZONE)
@@ -706,13 +800,172 @@ async def cmd_start(message: types.Message):
     web_app_url = f"{WEB_SERVER_HOST}/"
     markup_kb.append([KeyboardButton(text="💧 Отправить отчет (Mini App)", web_app=WebAppInfo(url=web_app_url))])
 
+    if is_courier or is_admin:
+        markup_kb.append([KeyboardButton(text="💰 Моя зарплата / Статистика")])
+
     if is_admin:
         markup_kb.append([KeyboardButton(text="📊 Сводка за сегодня"), KeyboardButton(text="🚚 Статистика по курьерам")])
+        markup_kb.append([KeyboardButton(text="⚙️ Управление курьерами")])
 
     markup = ReplyKeyboardMarkup(keyboard=markup_kb, resize_keyboard=True)
     await message.answer("👋 Добро пожаловать! Используйте меню ниже для отправки отчетов или просмотра статистики.", reply_markup=markup)
 
-# ТЕКСТОВОЕ МЕНЮ
+@dp.message(F.text == "💰 Моя зарплата / Статистика")
+async def cmd_my_stats(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    couriers = load_couriers()
+    
+    if not ((couriers and user_id in couriers) or (ADMIN_IDS and user_id in ADMIN_IDS)):
+        await message.answer("❌ У вас нет доступа к этой функции.")
+        return
+
+    await state.set_state(CourierMyStatsStates.waiting_for_period)
+    buttons = [
+        [KeyboardButton(text="📅 За сегодня"), KeyboardButton(text="📅 За 7 дней")],
+        [KeyboardButton(text="📅 За 15 дней"), KeyboardButton(text="🔙 Главное меню")]
+    ]
+    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    await message.answer("📅 Выберите период для просмотра вашей статистики:", reply_markup=markup)
+
+@dp.message(CourierMyStatsStates.waiting_for_period, F.text.in_({"📅 За сегодня", "📅 За 7 дней", "📅 За 15 дней"}))
+async def handle_my_stats_period(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    if message.text == "📅 За сегодня":
+        days = 1
+    elif message.text == "📅 За 7 дней":
+        days = 7
+    else:
+        days = 15
+
+    await state.clear()
+    await send_courier_personal_stats(message, user_id, days)
+    await cmd_start(message)
+
+# КНОПКА МЕНЮ УПРАВЛЕНИЯ КУРЬЕРАМИ ДЛЯ АДМИНА
+@dp.message(F.text == "⚙️ Управление курьерами")
+async def admin_manage_menu(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Нет прав.")
+        return
+    
+    buttons = [
+        [KeyboardButton(text="➕ Добавить курьера"), KeyboardButton(text="✏️ Переименовать курьера")],
+        [KeyboardButton(text="🗑 Удалить курьера"), KeyboardButton(text="📋 Список курьеров")],
+        [KeyboardButton(text="🔙 Главное меню")]
+    ]
+    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    await message.answer("⚙️ Меню управления курьерами. Выберите действие:", reply_markup=markup)
+
+# 1. ДОБАВЛЕНИЕ ЧЕРЕЗ КНОПКУ
+@dp.message(F.text == "➕ Добавить курьера")
+async def ask_add_courier(message: types.Message, state: FSMContext):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        return
+    await state.set_state(AdminManageStates.waiting_for_add_data)
+    await message.answer(
+        "➕ Введите данные нового курьера в формате:\n`ТЕЛЕГРАМ_ID ИМЯ`\n\nПример: `120958093 Алексей`\n*(Или нажмите «🔙 Главное меню»)*", 
+        parse_mode="Markdown"
+    )
+
+@dp.message(AdminManageStates.waiting_for_add_data)
+async def process_add_courier(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        await message.answer("⚠️ Неверный формат! Введите ID и имя через пробел (например: `120958093 Алексей`). Попробуйте снова или нажмите «🔙 Главное меню».", parse_mode="Markdown")
+        return
+
+    new_id = int(parts[0])
+    name = parts[1].strip()
+    save_courier_to_db(new_id, name)
+    await state.clear()
+    await message.answer(f"✅ Курьер **{name}** (ID: `{new_id}`) успешно добавлен!", parse_mode="Markdown")
+    await admin_manage_menu(message)
+
+# 2. ПЕРЕИМЕНОВАНИЕ ЧЕРЕЗ КНОПКУ
+@dp.message(F.text == "✏️ Переименовать курьера")
+async def ask_rename_courier(message: types.Message, state: FSMContext):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        return
+    await state.set_state(AdminManageStates.waiting_for_rename_data)
+    await message.answer(
+        "✏️ Введите новые данные курьера в формате:\n`ТЕЛЕГРАМ_ID НОВОЕ_ИМЯ`\n\nПример: `120958093 Алексей Новый`", 
+        parse_mode="Markdown"
+    )
+
+@dp.message(AdminManageStates.waiting_for_rename_data)
+async def process_rename_courier(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        await message.answer("⚠️ Неверный формат! Введите ID и новое имя через пробел. Попробуйте снова.", parse_mode="Markdown")
+        return
+
+    target_id = int(parts[0])
+    new_name = parts[1].strip()
+    couriers = load_couriers()
+
+    if target_id in couriers:
+        save_courier_to_db(target_id, new_name)
+        await state.clear()
+        await message.answer(f"✏️ Курьер с ID `{target_id}` переименован в **{new_name}**.", parse_mode="Markdown")
+        await admin_manage_menu(message)
+    else:
+        await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе. Проверьте ID и попробуйте снова.", parse_mode="Markdown")
+
+# 3. УДАЛЕНИЕ ЧЕРЕЗ КНОПКУ
+@dp.message(F.text == "🗑 Удалить курьера")
+async def ask_remove_courier(message: types.Message, state: FSMContext):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        return
+    await state.set_state(AdminManageStates.waiting_for_remove_id)
+    await message.answer("🗑 Введите Telegram ID курьера, которого нужно удалить:", parse_mode="Markdown")
+
+@dp.message(AdminManageStates.waiting_for_remove_id)
+async def process_remove_courier(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Главное меню":
+        await back_to_main_menu(message, state)
+        return
+
+    text_id = message.text.strip()
+    if not text_id.isdigit():
+        await message.answer("⚠️ ID должен состоять только из цифр. Попробуйте снова.")
+        return
+
+    target_id = int(text_id)
+    couriers = load_couriers()
+    if target_id in couriers:
+        remove_courier_from_db(target_id)
+        await state.clear()
+        await message.answer(f"🗑 Курьер с ID `{target_id}` удален из базы.", parse_mode="Markdown")
+        await admin_manage_menu(message)
+    else:
+        await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе.")
+
+# 4. СПИСОК КУРЬЕРОВ ЧЕРЕЗ КНОПКУ
+@dp.message(F.text == "📋 Список курьеров")
+async def list_couriers_button(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        return
+    
+    couriers = load_couriers()
+    if not couriers:
+        await message.answer("📭 В базе пока нет зарегистрированных курьеров.")
+        return
+
+    text = "📋 **Список зарегистрированных курьеров:**\n\n"
+    for idx, (cid, name) in enumerate(couriers.items(), 1):
+        text += f"{idx}. **{name}** — ID: `{cid}`\n"
+
+    await message.answer(text, parse_mode="Markdown")
+
+# ТЕКСТОВОЕ МЕНЮ ДЛЯ АДМИНА
 @dp.message(F.text == "📊 Сводка за сегодня")
 async def cmd_summary(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -721,27 +974,19 @@ async def cmd_summary(message: types.Message):
     await send_summary_report(message)
 
 @dp.message(F.text == "🚚 Статистика по курьерам")
-async def cmd_couriers_list(message: types.Message, state: FSMContext):
+async def cmd_couriers_list_menu(message: types.Message, state: FSMContext):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ Нет прав.")
         return
 
-    reports = load_reports()
-    courier_map = {}
-    for r in reports:
-        cid = r.get("courier_id")
-        if cid is not None:
-            cname = r.get("courier_name", "Курьер")
-            cuser = r.get("courier_username", "нет_юзернейма")
-            courier_map[str(cid)] = f"{cname} (@{cuser})"
-
-    if not courier_map:
-        await message.answer("📭 В базе пока нет ни одного отчета.")
+    couriers = load_couriers()
+    if not couriers:
+        await message.answer("📭 В базе пока нет зарегистрированных курьеров.")
         return
 
     keyboard_buttons = []
-    for cid, label in courier_map.items():
-        keyboard_buttons.append([KeyboardButton(text=f"👤 Курьер: {cid} | {label[:20]}")])
+    for cid, name in couriers.items():
+        keyboard_buttons.append([KeyboardButton(text=f"👤 Курьер: {cid} | {name}")])
     
     keyboard_buttons.append([KeyboardButton(text="🔙 Главное меню")])
     markup = ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
@@ -815,42 +1060,27 @@ async def back_to_main_menu(message: types.Message, state: FSMContext):
     await state.clear()
     await cmd_start(message)
 
-# Команды управления
+# Команды управления (на всякий случай остаются рабочими)
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
         return
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        await message.answer("⚠️ Использование: `/add ТЕЛЕГРАМ_ID`", parse_mode="Markdown")
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3 or not args[1].isdigit():
+        await message.answer("⚠️ Использование: `/add ТЕЛЕГРАМ_ID ИМЯ`", parse_mode="Markdown")
         return
-    new_id = int(args[1])
-    couriers = load_couriers()
-    if new_id in couriers:
-        await message.answer(f"ℹ️ Курьер с ID `{new_id}` уже есть.", parse_mode="Markdown")
-    else:
-        couriers.append(new_id)
-        save_couriers_to_db(couriers)
-        await message.answer(f"✅ Курьер с ID `{new_id}` добавлен в базу Supabase!", parse_mode="Markdown")
+    save_courier_to_db(int(args[1]), args[2].strip())
+    await message.answer(f"✅ Курьер **{args[2].strip()}** добавлен!", parse_mode="Markdown")
 
 @dp.message(Command("remove"))
 async def cmd_remove_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
         return
     args = message.text.split()
     if len(args) < 2 or not args[1].isdigit():
-        await message.answer("⚠️ Использование: `/remove ТЕЛЕГРАМ_ID`", parse_mode="Markdown")
         return
-    target_id = int(args[1])
-    couriers = load_couriers()
-    if target_id in couriers:
-        couriers.remove(target_id)
-        save_couriers_to_db(couriers)
-        await message.answer(f"🗑 Курьер с ID `{target_id}` удален из базы.", parse_mode="Markdown")
-    else:
-        await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе.", parse_mode="Markdown")
+    remove_courier_from_db(int(args[1]))
+    await message.answer(f"🗑 Курьер удален.")
 
 # Запуск aiohttp сервера и вебхука
 async def on_startup(app):

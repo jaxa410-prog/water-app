@@ -941,7 +941,7 @@ async def main():
     app.router.add_get("/health", handle_health)
     app.router.add_get("/api/route", api_get_route)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    app.router.add_post("/api/report", api_post_report)
+    app.router.add_post("/api/report", handle_api_report)
 
     dp.startup.register(on_startup)
 
@@ -951,7 +951,8 @@ async def main():
     await site.start()
     logging.info(f"Веб-сервер запущен на порту {PORT}")
 
-    await dp.start_polling(bot)
+    # Запускаем только вебхук-сервер без conflict-ошибок polling
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -450,7 +450,7 @@ async def handle_api_report(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
-# ФУНКЦИЯ ГЕНЕРАЦИИ СВОДНОГО ОТЧЕТА
+# ФУНКЦИЯ СВОДНОГО ОТЧЕТА
 async def send_summary_report(target_message: types.Message):
     try:
         today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
@@ -549,11 +549,11 @@ async def send_summary_report(target_message: types.Message):
         await target_message.answer(text)
 
     except Exception as e:
-        logging.error(f"Ошибка формирования сводного отчета: {e}", exc_info=True)
+        logging.error(f"Ошибка сводного отчета: {e}", exc_info=True)
         await target_message.answer(f"⚠️ Ошибка формирования отчета: {e}")
 
 
-# ТЕКСТОВАЯ КОМАНДА СВОДНОГО ОТЧЕТА (100% НАДЕЖНОСТЬ)
+# СВОДКА ЗА СЕГОДНЯ
 @dp.message(F.text == "📊 Сводка за сегодня")
 @dp.message(Command("summary"))
 async def cmd_summary_text(message: types.Message):
@@ -563,25 +563,42 @@ async def cmd_summary_text(message: types.Message):
     await send_summary_report(message)
 
 
-# ИНЛАЙН ОБРАБОТЧИК КНОПКИ СВОДКИ
-@dp.callback_query(lambda c: c.data == "admin_stat_today_all")
-async def admin_stat_today_all_handler(callback: types.CallbackQuery):
-    try:
-        await callback.answer("⏳ Загрузка...")
-    except Exception:
-        pass
-
-    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        try:
-            await callback.message.answer("❌ Нет доступа")
-        except Exception:
-            pass
+# МЕНЮ ПРОСМОТРА КУРЬЕРОВ (СПИСОК)
+@dp.message(F.text == "🚚 Статистика по курьерам")
+async def admin_select_courier_menu(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
         return
 
-    await send_summary_report(callback.message)
+    reports = load_reports()
+    courier_map = {}
+
+    for r in reports:
+        cid = r.get("courier_id")
+        if cid:
+            try:
+                cid = int(cid)
+            except ValueError:
+                pass
+            cname = r.get("courier_name", "Курьер")
+            cuser = r.get("courier_username", "нет_юзернейма")
+            courier_map[cid] = f"{cname} (@{cuser})"
+
+    if not courier_map:
+        await message.answer("📭 В системе пока нет ни одного опубликованного отчета.")
+        return
+
+    inline_keyboard = []
+    for cid, label in courier_map.items():
+        inline_keyboard.append([
+            InlineKeyboardButton(text=f"🚚 {label}", callback_data=f"sel_cour_{cid}")
+        ])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    await message.answer("👤 Выберите курьера для просмотра детальной статистики:", reply_markup=kb)
 
 
-# КНОПКИ ПЕРИОДОВ КУРЬЕРОВ
+# ВЫБОР ПЕРИОДА КУРЬЕРА
 @dp.callback_query(lambda c: c.data and c.data.startswith("sel_cour_"))
 async def admin_select_period(callback: types.CallbackQuery):
     try:
@@ -626,6 +643,7 @@ async def admin_select_period(callback: types.CallbackQuery):
         )
 
 
+# ПОКАЗ ОТЧЕТА ПО КУРЬЕРУ ЗА ПЕРИОД
 @dp.callback_query(lambda c: c.data and c.data.startswith("rep_"))
 async def admin_show_courier_report(callback: types.CallbackQuery):
     try:
@@ -647,6 +665,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     days_limit = int(period) if period.isdigit() else None
     reports = load_reports()
     now = datetime.now(UZ_TIMEZONE)
+    today_date_str = now.strftime("%Y-%m-%d")
 
     phys_deliv = 0
     jur_deliv = 0
@@ -666,7 +685,11 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
             except Exception:
                 continue
 
-            if days_limit:
+            if period == "1":
+                # За сегодня
+                if not r_date_str.startswith(today_date_str):
+                    continue
+            elif days_limit:
                 cutoff = now - timedelta(days=days_limit)
                 if r_date < cutoff:
                     continue
@@ -725,12 +748,12 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     )
 
     try:
-        await callback.message.edit_text(text)
-    except Exception:
         await callback.message.answer(text)
+    except Exception:
+        pass
 
 
-# Команды админа
+# Команды управления
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -789,46 +812,6 @@ async def cmd_list_couriers(message: types.Message):
         await message.answer(text, parse_mode="Markdown")
 
 
-@dp.message(Command("stats"))
-@dp.message(F.text == "📊 Статистика админа")
-async def admin_panel_select_courier(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
-        return
-
-    reports = load_reports()
-    courier_map = {}
-
-    for r in reports:
-        cid = r.get("courier_id")
-        if cid:
-            try:
-                cid = int(cid)
-            except ValueError:
-                pass
-            cname = r.get("courier_name", "Курьер")
-            cuser = r.get("courier_username", "нет_юзернейма")
-            courier_map[cid] = f"{cname} (@{cuser})"
-
-    inline_keyboard = []
-    
-    inline_keyboard.append([
-        InlineKeyboardButton(text="🏢 Общий сводный отчет (За сегодня)", callback_data="admin_stat_today_all")
-    ])
-
-    for cid, label in courier_map.items():
-        inline_keyboard.append([
-            InlineKeyboardButton(text=f"🚚 {label}", callback_data=f"sel_cour_{cid}")
-        ])
-
-    if not courier_map:
-        await message.answer("📭 В системе пока нет ни одного опубликованного отчета.")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-    await message.answer("👥 Панель администратора:\nВыберите курьера для просмотра статистики:", reply_markup=kb)
-
-
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -849,7 +832,7 @@ async def cmd_start(message: types.Message):
     ]
     
     if not ADMIN_IDS or user_id in ADMIN_IDS:
-        buttons.insert(0, [KeyboardButton(text="📊 Статистика админа")])
+        buttons.insert(0, [KeyboardButton(text="🚚 Статистика по курьерам")])
 
     markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -868,7 +851,7 @@ async def cmd_start(message: types.Message):
         "👋 Добро пожаловать!\nИспользуйте меню ниже для работы с системой.", 
         reply_markup=keyboard
     )
-    await message.answer("Меню управления:", reply_markup=markup)
+    await message.answer("Главное меню:", reply_markup=markup)
 
 
 @dp.message(F.text == "📦 Открыть отчет / Hisobotni ochish")

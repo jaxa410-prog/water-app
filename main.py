@@ -72,11 +72,11 @@ def load_couriers():
     try:
         response = supabase.table("couriers").select("user_id, name").execute()
         couriers_dict = {}
-        for row in response.data:
+        for row in (response.data or []):
             uid = row.get("user_id")
             name = row.get("name", "Курьер")
-            if uid:
-                couriers_dict[int(uid)] = name
+            if uid is not None:
+                couriers_dict[int(uid)] = str(name)
         return couriers_dict
     except Exception as e:
         logging.error(f"Ошибка загрузки курьеров из Supabase: {e}")
@@ -87,7 +87,12 @@ def save_courier_to_db(user_id, name):
     if not supabase:
         return
     try:
-        supabase.table("couriers").upsert({"user_id": int(user_id), "name": name}).execute()
+        existing = supabase.table("couriers").select("user_id").eq("user_id", int(user_id)).execute()
+        if existing.data and len(existing.data) > 0:
+            supabase.table("couriers").update({"name": name}).eq("user_id", int(user_id)).execute()
+        else:
+            supabase.table("couriers").insert({"user_id": int(user_id), "name": name}).execute()
+        logging.info(f"Курьер {name} (ID: {user_id}) успешно сохранен в базе!")
     except Exception as e:
         logging.error(f"Ошибка сохранения курьера в Supabase: {e}")
 
@@ -856,14 +861,13 @@ async def admin_manage_menu(message: types.Message):
     markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
     await message.answer("⚙️ Меню управления курьерами. Выберите действие:", reply_markup=markup)
 
-# 1. ДОБАВЛЕНИЕ ЧЕРЕЗ КНОПКУ
 @dp.message(F.text == "➕ Добавить курьера")
 async def ask_add_courier(message: types.Message, state: FSMContext):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         return
     await state.set_state(AdminManageStates.waiting_for_add_data)
     await message.answer(
-        "➕ Введите данные нового курьера в формате:\n`ТЕЛЕГРАМ_ID ИМЯ`\n\nПример: `120958093 Алексей`\n*(Или нажмите «🔙 Главное меню»)*", 
+        "➕ Введите данные нового курьера в формате:\n`ТЕЛЕГРАМ_ID ИМЯ`\n\nПример: `120958093 Жахонгир`", 
         parse_mode="Markdown"
     )
 
@@ -875,7 +879,7 @@ async def process_add_courier(message: types.Message, state: FSMContext):
 
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[0].isdigit():
-        await message.answer("⚠️ Неверный формат! Введите ID и имя через пробел (например: `120958093 Алексей`). Попробуйте снова или нажмите «🔙 Главное меню».", parse_mode="Markdown")
+        await message.answer("⚠️ Неверный формат! Введите ID и имя через пробел (например: `120958093 Жахонгир`).", parse_mode="Markdown")
         return
 
     new_id = int(parts[0])
@@ -885,14 +889,13 @@ async def process_add_courier(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Курьер **{name}** (ID: `{new_id}`) успешно добавлен!", parse_mode="Markdown")
     await admin_manage_menu(message)
 
-# 2. ПЕРЕИМЕНОВАНИЕ ЧЕРЕЗ КНОПКУ
 @dp.message(F.text == "✏️ Переименовать курьера")
 async def ask_rename_courier(message: types.Message, state: FSMContext):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         return
     await state.set_state(AdminManageStates.waiting_for_rename_data)
     await message.answer(
-        "✏️ Введите новые данные курьера в формате:\n`ТЕЛЕГРАМ_ID НОВОЕ_ИМЯ`\n\nПример: `120958093 Алексей Новый`", 
+        "✏️ Введите новые данные курьера в формате:\n`ТЕЛЕГРАМ_ID НОВОЕ_ИМЯ`\n\nПример: `120958093 Жахонгир Старший`", 
         parse_mode="Markdown"
     )
 
@@ -904,7 +907,7 @@ async def process_rename_courier(message: types.Message, state: FSMContext):
 
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[0].isdigit():
-        await message.answer("⚠️ Неверный формат! Введите ID и новое имя через пробел. Попробуйте снова.", parse_mode="Markdown")
+        await message.answer("⚠️ Неверный формат! Введите ID и новое имя через пробел.", parse_mode="Markdown")
         return
 
     target_id = int(parts[0])
@@ -917,9 +920,8 @@ async def process_rename_courier(message: types.Message, state: FSMContext):
         await message.answer(f"✏️ Курьер с ID `{target_id}` переименован в **{new_name}**.", parse_mode="Markdown")
         await admin_manage_menu(message)
     else:
-        await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе. Проверьте ID и попробуйте снова.", parse_mode="Markdown")
+        await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе. Сначала добавьте его.", parse_mode="Markdown")
 
-# 3. УДАЛЕНИЕ ЧЕРЕЗ КНОПКУ
 @dp.message(F.text == "🗑 Удалить курьера")
 async def ask_remove_courier(message: types.Message, state: FSMContext):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -948,7 +950,6 @@ async def process_remove_courier(message: types.Message, state: FSMContext):
     else:
         await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе.")
 
-# 4. СПИСОК КУРЬЕРОВ ЧЕРЕЗ КНОПКУ
 @dp.message(F.text == "📋 Список курьеров")
 async def list_couriers_button(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -1060,7 +1061,7 @@ async def back_to_main_menu(message: types.Message, state: FSMContext):
     await state.clear()
     await cmd_start(message)
 
-# Команды управления (на всякий случай остаются рабочими)
+# Команды управления (альтернативные)
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:

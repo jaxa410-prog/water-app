@@ -699,7 +699,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         await callback.message.answer(text)
 
 
-# НАДЕЖНЫЙ ОБРАБОТЧИК КНОПКИ СВОДНОГО ОТЧЕТА
+# НАДЕЖНЫЙ ОБРАБОТЧИК КНОПКИ СВОДНОГО ОТЧЕТА (ОТПРАВКА НОВЫМ СООБЩЕНИЕМ)
 @dp.callback_query(lambda c: c.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     try:
@@ -720,10 +720,7 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
         
         if not reports:
             msg = "📭 База данных reports.json пуста."
-            try:
-                await callback.message.edit_text(msg)
-            except Exception:
-                await callback.message.answer(msg)
+            await callback.message.answer(msg)
             return
 
         courier_stats = {}
@@ -774,10 +771,7 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
                 f"📭 За сегодня (`{today_date}`) отчетов не найдено.\n"
                 f"📅 Последний отчет в базе был от: `{last_date}`"
             )
-            try:
-                await callback.message.edit_text(msg, parse_mode="Markdown")
-            except Exception:
-                await callback.message.answer(msg, parse_mode="Markdown")
+            await callback.message.answer(msg, parse_mode="Markdown")
             return
 
         text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
@@ -815,10 +809,7 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
             f"💵 Всего курьерских: {tot_earn_fmt} сум"
         )
 
-        try:
-            await callback.message.edit_text(text)
-        except Exception:
-            await callback.message.answer(text)
+        await callback.message.answer(text)
 
     except Exception as e:
         logging.error(f"Ошибка в общем сводном отчете: {e}", exc_info=True)

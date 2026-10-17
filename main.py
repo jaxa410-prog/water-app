@@ -24,6 +24,7 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 # Подключение к Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -71,7 +72,6 @@ def save_couriers_to_db(couriers_list):
     if not supabase:
         return
     try:
-        # Синхронизация: очищаем и записываем актуальный список
         supabase.table("couriers").delete().neq("user_id", 0).execute()
         if couriers_list:
             data_to_insert = [{"user_id": int(cid)} for cid in couriers_list]
@@ -89,17 +89,100 @@ def load_reports():
         logging.error(f"Ошибка чтения отчетов из Supabase: {e}")
         return []
 
-def save_report_to_db(report_data):
+def get_or_create_client(client_id: str, client_name: str = ""):
+    """Получает или создает клиента и возвращает его текущий баланс тары"""
     if not supabase:
-        logging.error("Supabase не подключен, отчет не сохранен в БД!")
-        return
+        return {"bottle_balance": 0}
     try:
-        supabase.table("reports").insert(report_data).execute()
-        logging.info("Отчет успешно сохранен в Supabase!")
+        res = supabase.table("clients").select("*").eq("client_id", str(client_id)).execute()
+        if res.data:
+            return res.data[0]
+        else:
+            new_client = {
+                "client_id": str(client_id),
+                "name": client_name,
+                "bottle_balance": 0
+            }
+            supabase.table("clients").insert(new_client).execute()
+            return new_client
     except Exception as e:
-        logging.error(f"Ошибка записи отчета в Supabase: {e}")
+        logging.error(f"Ошибка при работе с клиентом: {e}")
+        return {"bottle_balance": 0}
 
-# HTML Mini App
+def get_courier_route(courier_id: int):
+    """Получает список задач курьера на сегодня из таблицы daily_routes"""
+    if not supabase:
+        return []
+    try:
+        today_str = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
+        response = supabase.table("daily_routes") \
+            .select("*") \
+            .eq("courier_id", str(courier_id)) \
+            .eq("date", today_str) \
+            .eq("status", "pending") \
+            .execute()
+        return response.data
+    except Exception as e:
+        logging.error(f"Ошибка получения маршрута: {e}")
+        return []
+
+def save_report_to_db_with_balance(data):
+    """
+    Сохраняет отчет с проверкой баланса тары (защита от махинаций),
+    обновляет таблицу clients, фиксирует лог и закрывает задачу в маршруте.
+    """
+    if not supabase:
+        return False, "Supabase не подключен"
+    
+    client_id = str(data.get("client_id"))
+    delivered = int(data.get("delivered", 0))
+    returned = int(data.get("returned", 0))
+    courier_id = str(data.get("user_id"))
+    task_type = data.get("task_type", "delivery")
+
+    # 1. Получаем текущий баланс тары клиента
+    client_info = get_or_create_client(client_id)
+    current_balance = client_info["bottle_balance"]
+
+    # 2. ЗАЩИТА: Курьер не может вернуть больше, чем есть на руках у клиента + доставлено в этот раз
+    max_return_allowed = current_balance + delivered
+    if returned > max_return_allowed:
+        return False, f"Ошибка! У клиента на руках всего {current_balance} шт. Нельзя вернуть {returned} (максимум: {max_return_allowed})."
+
+    # 3. Считаем новый баланс тары
+    new_balance = current_balance + delivered - returned
+
+    try:
+        # 4. Запись отчета в reports
+        res = supabase.table("reports").insert(data).execute()
+        report_id = res.data[0]["id"] if res.data and "id" in res.data[0] else None
+
+        # 5. Обновляем баланс в таблице clients
+        supabase.table("clients").update({"bottle_balance": new_balance}).eq("client_id", client_id).execute()
+
+        # 6. Пишем аудит-лог в report_logs
+        supabase.table("report_logs").insert({
+            "report_id": report_id,
+            "client_id": client_id,
+            "courier_id": courier_id,
+            "action": "create",
+            "new_delivered": delivered,
+            "new_returned": returned
+        }).execute()
+
+        # 7. Закрываем задачу в daily_routes (если она там была)
+        supabase.table("daily_routes").update({"status": "completed"})\
+            .eq("courier_id", courier_id)\
+            .eq("client_id", client_id)\
+            .execute()
+
+        return True, new_balance
+    except Exception as e:
+        logging.error(f"Ошибка записи отчета и баланса в Supabase: {e}")
+        return False, str(e)
+
+
+# HTML Mini App с поддержкой маршрутов и выбора задач
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -418,8 +501,13 @@ async def handle_api_report(request):
             "total_price": total_price,
             "earnings": courier_earnings
         }
-        save_report_to_db(report_record)
 
+        # Вызываем функцию сохранения с проверкой баланса тары
+        success, result_msg = save_report_to_db_with_balance(report_record)
+        if not success:
+            return web.json_response({"status": "error", "message": result_msg}, status=400)
+
+        new_bottle_balance = result_msg
         formatted_price = f"{total_price:,}".replace(",", " ")
         formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
         
@@ -429,6 +517,7 @@ async def handle_api_report(request):
             f"🆔 ID / Фирма: {client_id}\n"
             f"💧 Сдал полных (19л): {delivered} шт.\n"
             f"🔄 Принял пустых (19л): {returned} шт.\n"
+            f"📦 Остаток тары у клиента: {new_bottle_balance} шт.\n"
             f"👥 Тип клиента: {client_type}\n"
             f"💳 Тип оплаты: {payment_type}\n"
             f"💰 Сумма заказа: {formatted_price} сум\n"
@@ -452,6 +541,14 @@ async def handle_api_report(request):
     except Exception as e:
         logging.error(f"Ошибка сохранения отчета: {e}", exc_info=True)
         return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+async def api_get_route(request):
+    """API эндпоинт для Mini App: возвращает маршрут курьера на сегодня"""
+    courier_id = request.rel_url.query.get("courier_id")
+    if not courier_id:
+        return web.json_response({"error": "No courier_id provided"}, status=400)
+    routes = get_courier_route(int(courier_id))
+    return web.json_response(routes)
 
 # ОБЩИЙ СВОДНЫЙ ОТЧЕТ
 async def send_summary_report(target_message: types.Message):
@@ -680,7 +777,35 @@ async def send_courier_detailed_orders(target_message: types.Message, target_id:
         logging.error(f"Ошибка детального списка заказов: {e}")
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
-# ТЕКСТОВОЕ МЕНЮ
+# ТЕКСТОВОЕ МЕНЮ И КОМАНДЫ
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    couriers = load_couriers()
+    
+    if couriers and user_id not in couriers and (not ADMIN_IDS or user_id not in ADMIN_IDS):
+        await message.answer("⛔ У вас нет доступа к системе курьеров. Обратитесь к администратору.")
+        return
+
+    is_admin = ADMIN_IDS and user_id in ADMIN_IDS
+
+    if is_admin:
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="📊 Сводка за сегодня"), KeyboardButton(text="🚚 Статистика по курьерам")],
+            ],
+            resize_keyboard=True
+        )
+        await message.answer("👋 Добро пожаловать, администратор!", reply_markup=keyboard)
+    else:
+        web_app_url = f"{WEB_SERVER_HOST}/"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Открыть Mini App", web_app=WebAppInfo(url=web_app_url))]
+            ]
+        )
+        await message.answer("👋 Здравствуйте! Нажмите кнопку ниже, чтобы открыть Mini App и отправить отчёт.", reply_markup=keyboard)
+
 @dp.message(F.text == "📊 Сводка за сегодня")
 async def cmd_summary(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -777,7 +902,6 @@ async def back_to_main_menu(message: types.Message, state: FSMContext):
     await state.clear()
     await cmd_start(message)
 
-# Команды управления
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -812,111 +936,30 @@ async def cmd_remove_courier(message: types.Message):
         save_couriers_to_db(couriers)
         await message.answer(f"🗑 Курьер с ID `{target_id}` удален из базы.", parse_mode="Markdown")
     else:
-        await message.answer(f"⚠️ Курьер не найден.", parse_mode="Markdown")
+        await message.answer(f"ℹ️ Курьер с ID `{target_id}` не найден в базе.", parse_mode="Markdown")
 
-@dp.message(Command("list"))
-async def cmd_list_couriers(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
-        return
-    couriers = load_couriers()
-    if not couriers:
-        await message.answer("📭 Список курьеров пуст.")
-    else:
-        text = "📋 **Список курьеров в базе (ID):**\n\n" + "\n".join([f"• `{cid}`" for cid in couriers])
-        await message.answer(text, parse_mode="Markdown")
-
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    couriers = load_couriers()
-    if couriers and user_id not in couriers:
-        if not (ADMIN_IDS and user_id in ADMIN_IDS):
-            await message.answer(f"⛔️ Нет доступа. Ваш ID: `{user_id}`", parse_mode="Markdown")
-            return
-
-    buttons = [
-        [KeyboardButton(text="📊 Сводка за сегодня")],
-        [KeyboardButton(text="🚚 Статистика по курьерам")],
-        [KeyboardButton(text="💰 Мой заработок за сегодня")],
-        [KeyboardButton(text="📦 Открыть отчет / Hisobotni ochish")]
-    ]
-    
-    markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📦 Заполнить отчет (Mini App)", web_app=WebAppInfo(url=WEB_SERVER_HOST))]
-        ]
-    )
-    
-    await message.answer("👋 Добро пожаловать! Используйте меню ниже:", reply_markup=keyboard)
-    await message.answer("Главное меню:", reply_markup=markup)
-
-@dp.message(F.text == "📦 Открыть отчет / Hisobotni ochish")
-async def open_report_btn(message: types.Message):
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📦 Заполнить отчет (Mini App)", web_app=WebAppInfo(url=WEB_SERVER_HOST))]
-        ]
-    )
-    await message.answer("Нажмите кнопку ниже для открытия формы:", reply_markup=keyboard)
-
-@dp.message(F.text == "💰 Мой заработок за сегодня")
-async def check_today_earnings(message: types.Message):
-    user_id = message.from_user.id
-    today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
-    reports = load_reports()
-    total_earned, total_delivered, orders_count = 0, 0, 0
-
-    for r in reports:
-        if str(r.get("courier_id", "")) == str(user_id) and str(r.get("date", "")).startswith(today_date):
-            total_earned += int(r.get("earnings", 0) or 0)
-            total_delivered += int(r.get("delivered", 0) or 0)
-            orders_count += 1
-
-    formatted_earnings = f"{total_earned:,}".replace(",", " ")
-    await message.answer(
-        f"📊 **Ваша статистика за сегодня ({today_date}):**\n\n"
-        f"📦 Успешных заказов: **{orders_count}**\n"
-        f"💧 Доставлено бутылей (19л): **{total_delivered} шт.**\n"
-        f"💵 **Заработано за сегодня:** `{formatted_earnings} сум`",
-        parse_mode="Markdown"
-    )
+# Запуск aiohttp сервера и вебхуков
+async def on_startup(bot: Bot):
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
 
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
-    app.router.add_post("/api/report", handle_api_report)
+    app.router.add_get("/api/route", api_get_route)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.router.add_post("/api/report", handle_api_report)
 
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        await bot.set_webhook(url=WEBHOOK_URL)
-    except Exception as e:
-        logging.error(f"Ошибка вебхука: {e}")
+    dp.startup.register(on_startup)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
+    logging.info(f"Веб-сервер запущен на порту {PORT}")
 
-    async def ping_loop():
-        await asyncio.sleep(10)
-        async with aiohttp.ClientSession() as session:
-            while True:
-                try:
-                    async with session.get(f"{WEB_SERVER_HOST}/health") as resp:
-                        pass
-                except Exception:
-                    pass
-                await asyncio.sleep(300)
-
-    asyncio.create_task(ping_loop())
-    await asyncio.Event().wait()
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Бот остановлен.")
+    asyncio.run(main())

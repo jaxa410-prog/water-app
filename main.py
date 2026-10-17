@@ -125,240 +125,413 @@ def save_report_to_db(report_data):
     except Exception as e:
         logging.error(f"Ошибка записи отчета в Supabase: {e}")
 
-# HTML Mini App
+# ПРЕМИУМ HTML MINI APP С НОВЫМ ДИЗАЙНОМ И ФУНКЦИОНАЛОМ
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Отчет курьера / Kuryer hisoboti</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Отчет курьера</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #f8fafc);
+            --card-bg: var(--tg-theme-secondary-bg-color, #ffffff);
+            --text-color: var(--tg-theme-text-color, #0f172a);
+            --hint-color: var(--tg-theme-hint-color, #64748b);
+            --primary-color: var(--tg-theme-button-color, #0284c7);
+            --primary-text: var(--tg-theme-button-text-color, #ffffff);
+            --border-color: #e2e8f0;
+            --accent-bg: #f0f9ff;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--tg-theme-bg-color, #f4f4f5);
-            color: var(--tg-theme-text-color, #000);
+            font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
             margin: 0;
-            padding: 16px;
-        }
-        .container {
-            max-width: 400px;
-            margin: 0 auto;
-            background: var(--tg-theme-secondary-bg-color, #ffffff);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        }
-        .lang-switcher {
+            padding: 12px;
             display: flex;
-            justify-content: flex-end;
-            margin-bottom: 15px;
+            justify-content: center;
         }
-        .lang-switcher select {
-            width: auto;
-            padding: 4px 8px;
-            font-size: 14px;
+
+        .card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+            border: 1px solid rgba(226, 232, 240, 0.8);
         }
-        h2 {
-            text-align: center;
-            font-size: 20px;
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 20px;
         }
-        .form-group {
-            margin-bottom: 14px;
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
+
+        .brand-icon {
+            width: 38px;
+            height: 38px;
+            background: linear-gradient(135deg, #38bdf8, #0284c7);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.25);
+        }
+
+        .brand-title {
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .lang-select {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 10px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-color);
+            outline: none;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
         label {
             display: block;
-            font-size: 14px;
+            font-size: 13px;
+            font-weight: 600;
             margin-bottom: 6px;
-            font-weight: 500;
+            color: var(--hint-color);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
+
         input, select {
             width: 100%;
-            padding: 10px 12px;
-            box-sizing: border-box;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-            font-size: 16px;
-            background: var(--tg-theme-bg-color, #fff);
-            color: var(--tg-theme-text-color, #000);
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1.5px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-color);
+            font-size: 15px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            outline: none;
         }
-        button {
-            width: 100%;
-            background-color: var(--tg-theme-button-color, #2481cc);
-            color: var(--tg-theme-button-text-color, #fff);
-            border: none;
-            padding: 14px;
-            font-size: 16px;
+
+        input:focus, select:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.1);
+        }
+
+        /* Быстрые кнопки количества */
+        .quick-chips {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .chip {
+            flex: 1;
+            padding: 7px 0;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-size: 13px;
             font-weight: 600;
-            border-radius: 8px;
+            text-align: center;
             cursor: pointer;
-            margin-top: 10px;
+            transition: all 0.15s ease;
         }
-        button:disabled {
-            background-color: #d1d5db;
-            color: #9ca3af;
+
+        .chip:active {
+            transform: scale(0.95);
+            background: var(--primary-color);
+            color: var(--primary-text);
+        }
+
+        .row-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .summary-box {
+            background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 18px 0 14px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid #bae6fd;
+        }
+
+        .summary-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #0369a1;
+        }
+
+        .summary-value {
+            font-size: 20px;
+            font-weight: 800;
+            color: #0284c7;
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #0284c7, #0369a1);
+            color: white;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 6px 20px rgba(2, 132, 199, 0.3);
+            transition: all 0.2s ease;
+        }
+
+        .btn-submit:active {
+            transform: scale(0.98);
+        }
+
+        .btn-submit:disabled {
+            background: #cbd5e1;
+            box-shadow: none;
             cursor: not-allowed;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="lang-switcher">
-            <select id="langSelect">
-                <option value="uz">🇺🇿 O'zbekcha</option>
-                <option value="ru" selected>🇷🇺 Русский</option>
+    <div class="card">
+        <div class="header">
+            <div class="brand">
+                <div class="brand-icon">💧</div>
+                <div class="brand-title" id="t_title">Отчет курьера</div>
+            </div>
+            <select id="langSelect" class="lang-select">
+                <option value="uz">🇺🇿 UZ</option>
+                <option value="ru" selected>🇷🇺 RU</option>
             </select>
         </div>
-        
-        <h2 id="t_title">💧 Отчет по доставке</h2>
+
         <form id="reportForm">
             <div class="form-group">
-                <label id="t_clientId" for="clientId">ID абонента / Фирма:</label>
-                <input type="text" id="clientId" required placeholder="Введите ID или название">
+                <label id="t_clientId">ID Абонента / Фирма</label>
+                <input type="text" id="clientId" placeholder="Например: 1045 или ООО Восток" required autocomplete="off">
             </div>
+
             <div class="form-group">
-                <label id="t_delivered" for="delivered">Сдал полных (19л):</label>
-                <input type="number" id="delivered" min="0" placeholder="0" required>
+                <label id="t_delivered">Сдал полных (19л)</label>
+                <input type="number" id="delivered" placeholder="0" min="0" required>
+                <div class="quick-chips">
+                    <div class="chip" onclick="addQty('delivered', 1)">+1</div>
+                    <div class="chip" onclick="addQty('delivered', 2)">+2</div>
+                    <div class="chip" onclick="addQty('delivered', 5)">+5</div>
+                    <div class="chip" onclick="setQty('delivered', 10)">10</div>
+                    <div class="chip" onclick="setQty('delivered', 0)">Сброс</div>
+                </div>
             </div>
+
             <div class="form-group">
-                <label id="t_returned" for="returned">Принял пустых (19л):</label>
-                <input type="number" id="returned" min="0" placeholder="0" required>
+                <label id="t_returned">Принял пустых (19л)</label>
+                <input type="number" id="returned" placeholder="0" min="0" required>
+                <div class="quick-chips">
+                    <div class="chip" onclick="addQty('returned', 1)">+1</div>
+                    <div class="chip" onclick="addQty('returned', 2)">+2</div>
+                    <div class="chip" onclick="addQty('returned', 5)">+5</div>
+                    <div class="chip" onclick="setQty('returned', 10)">10</div>
+                    <div class="chip" onclick="setQty('returned', 0)">Сброс</div>
+                </div>
             </div>
-            <div class="form-group">
-                <label id="t_clientType" for="clientType">Тип клиента:</label>
-                <select id="clientType">
-                    <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
-                    <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
-                </select>
+
+            <div class="row-grid">
+                <div class="form-group">
+                    <label id="t_clientType">Тип клиента</label>
+                    <select id="clientType">
+                        <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
+                        <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label id="t_paymentType">Тип оплаты</label>
+                    <select id="paymentType">
+                        <option value="Наличные" id="opt_cash">Наличные</option>
+                        <option value="Click/Payme">Click/Payme</option>
+                        <option value="Перечисление" id="opt_bank">Перечисление</option>
+                    </select>
+                </div>
             </div>
-            <div class="form-group">
-                <label id="t_paymentType" for="paymentType">Тип оплаты:</label>
-                <select id="paymentType">
-                    <option value="Наличные" id="opt_cash">Наличные</option>
-                    <option value="Click/Payme">Click/Payme</option>
-                    <option value="Перечисление" id="opt_bank">Перечисление</option>
-                </select>
+
+            <div class="summary-box">
+                <div class="summary-label" id="t_totalLabel">К оплате:</div>
+                <div class="summary-value" id="summaryDisplay">0 сум</div>
             </div>
-            <div class="form-group">
-                <label id="t_totalPrice" for="totalPrice">Сумма (сум):</label>
-                <input type="number" id="totalPrice" min="0" placeholder="0" required>
-            </div>
-            <button type="submit" id="submitBtn" disabled>Отправить отчет</button>
+
+            <button type="submit" id="submitBtn" class="btn-submit" disabled>Отправить отчет</button>
         </form>
     </div>
 
     <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
+        const tg = window.Telegram?.WebApp;
+        if (tg) tg.expand();
+
         const PRICE_PER_BOTTLE = 23000;
 
         const translations = {
             ru: {
-                title: "💧 Отчет по доставке",
-                clientId: "ID абонента / Фирма:",
-                clientIdPlaceholder: "Введите ID или название",
-                delivered: "Сдал полных (19л):",
-                returned: "Принял пустых (19л):",
-                clientType: "Тип клиента:",
+                title: "Отчет курьера",
+                clientId: "ID Абонента / Фирма",
+                clientIdPlaceholder: "Например: 1045 или ООО Восток",
+                delivered: "Сдал полных (19л)",
+                returned: "Принял пустых (19л)",
+                clientType: "Тип клиента",
                 jur: "Юр. лицо",
                 phys: "Физ. лицо",
-                paymentType: "Тип оплаты:",
+                paymentType: "Тип оплаты",
                 cash: "Наличные",
                 bank: "Перечисление",
-                totalPrice: "Сумма (сум):",
-                submit: "Отправить отчет"
+                totalLabel: "К оплате:",
+                submit: "Отправить отчет",
+                sending: "Отправка..."
             },
             uz: {
-                title: "💧 Yetkazib berish hisoboti",
-                clientId: "Abonent ID / Firma:",
-                clientIdPlaceholder: "ID yoki nomini kiriting",
-                delivered: "To'liq topshirildi (19l):",
-                returned: "Bo'sh qabul qilindi (19l):",
-                clientType: "Mijoz turi:",
+                title: "Kuryer hisoboti",
+                clientId: "Abonent ID / Firma",
+                clientIdPlaceholder: "Masalan: 1045 yoki Mas'uliyatli MCHJ",
+                delivered: "Topshirildi (19l)",
+                returned: "Qabul qilindi (19l)",
+                clientType: "Mijoz turi",
                 jur: "Yuridik shaxs",
                 phys: "Jismoniy shaxs",
-                paymentType: "To'lov turi:",
+                paymentType: "To'lov turi",
                 cash: "Naqd pul",
                 bank: "Pul o'tkazmasi",
-                totalPrice: "Summa (so'm):",
-                submit: "Hisobotni yuborish"
+                totalLabel: "Jami summa:",
+                submit: "Hisobotni yuborish",
+                sending: "Yuborilmoqda..."
             }
         };
 
         const langSelect = document.getElementById('langSelect');
-        const t_title = document.getElementById('t_title');
-        const t_clientId = document.getElementById('t_clientId');
         const clientIdInput = document.getElementById('clientId');
-        const t_delivered = document.getElementById('t_delivered');
-        const t_returned = document.getElementById('t_returned');
-        const t_clientType = document.getElementById('t_clientType');
-        const opt_jur = document.getElementById('opt_jur');
-        const opt_phys = document.getElementById('opt_phys');
-        const t_paymentType = document.getElementById('t_paymentType');
-        const opt_cash = document.getElementById('opt_cash');
-        const opt_bank = document.getElementById('opt_bank');
-        const t_totalPrice = document.getElementById('t_totalPrice');
         const deliveredInput = document.getElementById('delivered');
         const returnedInput = document.getElementById('returned');
-        const totalPriceInput = document.getElementById('totalPrice');
+        const clientTypeSelect = document.getElementById('clientType');
+        const paymentTypeSelect = document.getElementById('paymentType');
+        const summaryDisplay = document.getElementById('summaryDisplay');
         const submitBtn = document.getElementById('submitBtn');
 
-        langSelect.addEventListener('change', function() {
-            setLanguage(this.value);
+        let currentLang = 'ru';
+
+        langSelect.addEventListener('change', (e) => {
+            currentLang = e.target.value;
+            setLanguage(currentLang);
         });
 
         function setLanguage(lang) {
             const t = translations[lang];
-            t_title.innerText = t.title;
-            t_clientId.innerText = t.clientId;
+            document.getElementById('t_title').innerText = t.title;
+            document.getElementById('t_clientId').innerText = t.clientId;
             clientIdInput.placeholder = t.clientIdPlaceholder;
-            t_delivered.innerText = t.delivered;
-            t_returned.innerText = t.returned;
-            t_clientType.innerText = t.clientType;
-            opt_jur.innerText = t.jur;
-            opt_phys.innerText = t.phys;
-            t_paymentType.innerText = t.paymentType;
-            opt_cash.innerText = t.cash;
-            opt_bank.innerText = t.bank;
-            t_totalPrice.innerText = t.totalPrice;
-            submitBtn.innerText = t.submit;
-        }
-
-        function validateForm() {
-            if (clientIdInput.value.trim() !== "" && deliveredInput.value.trim() !== "" && returnedInput.value.trim() !== "") {
-                submitBtn.removeAttribute('disabled');
-            } else {
-                submitBtn.setAttribute('disabled', 'true');
+            document.getElementById('t_delivered').innerText = t.delivered;
+            document.getElementById('t_returned').innerText = t.returned;
+            document.getElementById('t_clientType').innerText = t.clientType;
+            document.getElementById('opt_jur').innerText = t.jur;
+            document.getElementById('opt_phys').innerText = t.phys;
+            document.getElementById('t_paymentType').innerText = t.paymentType;
+            document.getElementById('opt_cash').innerText = t.cash;
+            document.getElementById('opt_bank').innerText = t.bank;
+            document.getElementById('t_totalLabel').innerText = t.totalLabel;
+            if (!submitBtn.disabled && submitBtn.innerText !== translations[currentLang].sending) {
+                submitBtn.innerText = t.submit;
             }
         }
 
-        deliveredInput.addEventListener('input', function() {
-            const count = parseInt(deliveredInput.value) || 0;
-            totalPriceInput.value = count * PRICE_PER_BOTTLE;
+        // Авто-определение типа клиента по тексту в ID
+        clientIdInput.addEventListener('input', () => {
+            const val = clientIdInput.value.trim().toLowerCase();
+            if (val.length > 0 && isNaN(val)) {
+                clientTypeSelect.value = "Юр. лицо";
+            }
             validateForm();
         });
 
-        clientIdInput.addEventListener('input', validateForm);
+        function addQty(id, val) {
+            const el = document.getElementById(id);
+            let current = parseInt(el.value) || 0;
+            el.value = current + val;
+            updateCalc();
+        }
+
+        function setQty(id, val) {
+            const el = document.getElementById(id);
+            el.value = val === 0 ? '' : val;
+            updateCalc();
+        }
+
+        function updateCalc() {
+            const count = parseInt(deliveredInput.value) || 0;
+            const total = count * PRICE_PER_BOTTLE;
+            summaryDisplay.innerText = total.toLocaleString('ru-RU') + " сум";
+            validateForm();
+        }
+
+        deliveredInput.addEventListener('input', updateCalc);
         returnedInput.addEventListener('input', validateForm);
+
+        function validateForm() {
+            const isValid = clientIdInput.value.trim() !== "" && 
+                            deliveredInput.value.trim() !== "" && 
+                            returnedInput.value.trim() !== "";
+            submitBtn.disabled = !isValid;
+        }
 
         document.getElementById('reportForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             submitBtn.disabled = true;
-            submitBtn.innerText = "Отправка...";
+            submitBtn.innerText = translations[currentLang].sending;
 
             const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
+            const delivCount = parseInt(deliveredInput.value) || 0;
+            const calculatedTotal = delivCount * PRICE_PER_BOTTLE;
+
             const data = {
                 user_id: tgUser ? tgUser.id : null,
                 user_name: tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : "Курьер",
                 username: tgUser ? (tgUser.username || "нет_юзернейма") : "нет_юзернейма",
                 client_id: clientIdInput.value,
-                delivered: deliveredInput.value,
-                returned: returnedInput.value,
-                client_type: document.getElementById('clientType').value,
-                payment_type: document.getElementById('paymentType').value,
-                total_price: totalPriceInput.value
+                delivered: delivCount,
+                returned: parseInt(returnedInput.value) || 0,
+                client_type: clientTypeSelect.value,
+                payment_type: paymentTypeSelect.value,
+                total_price: calculatedTotal
             };
 
             try {
@@ -369,16 +542,16 @@ HTML_CONTENT = """
                 });
                 const resData = await response.json();
                 if (response.ok && resData.status === "ok") {
-                    tg.close();
+                    tg ? tg.close() : alert("Успешно отправлено!");
                 } else {
-                    alert("Ошибка отправки: " + (resData.message || "Попробуйте снова"));
+                    alert("Ошибка: " + (resData.message || "Попробуйте снова"));
                     submitBtn.disabled = false;
-                    submitBtn.innerText = "Отправить отчет";
+                    submitBtn.innerText = translations[currentLang].submit;
                 }
             } catch (err) {
                 alert("Ошибка соединения с сервером.");
                 submitBtn.disabled = false;
-                submitBtn.innerText = "Отправить отчет";
+                submitBtn.innerText = translations[currentLang].submit;
             }
         });
     </script>

@@ -20,9 +20,10 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-PORT = int(os.getenv("PORT", 8080))
+# Порт Render по умолчанию — 10000
+PORT = int(os.getenv("PORT", 10000))
 
-WEB_SERVER_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com")
+WEB_SERVER_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com").rstrip("/")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEB_SERVER_HOST}{WEBHOOK_PATH}"
 
@@ -35,7 +36,7 @@ REPORTS_FILE = "reports.json"
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
 
-# Актуальные ставки заработка курьера за 1 бутыль (в сумах)
+# Ставки заработка курьера за 1 бутыль
 BONUS_PHYSICAL = 3500   # За физ. лицо — 3500 сум
 BONUS_JURIDICAL = 2000  # За юр. лицо — 2000 сум
 
@@ -72,7 +73,7 @@ def save_report_to_db(report_data):
         json.dump(reports, f, ensure_ascii=False, indent=4)
 
 
-# HTML Mini App с отправкой через fetch API
+# HTML Mini App
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -512,6 +513,10 @@ async def admin_panel_select_courier(message: types.Message):
     for r in reports:
         cid = r.get("courier_id")
         if cid:
+            try:
+                cid = int(cid)
+            except ValueError:
+                pass
             cname = r.get("courier_name", "Курьер")
             cuser = r.get("courier_username", "нет_юзернейма")
             courier_map[cid] = f"{cname} (@{cuser})"
@@ -537,8 +542,9 @@ async def admin_panel_select_courier(message: types.Message):
 
 @dp.callback_query(F.data.startswith("sel_cour_"))
 async def admin_select_period(callback: types.CallbackQuery):
+    await callback.answer()
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("❌ Нет доступа", show_alert=True)
+        await callback.message.answer("❌ Нет доступа")
         return
 
     courier_id = callback.data.split("_")[2]
@@ -560,21 +566,20 @@ async def admin_select_period(callback: types.CallbackQuery):
     )
 
     await callback.message.edit_text(
-        f"👤 **Выбран курьер ID:** `{courier_id}`\n📅 Выберите период для расчета:",
-        reply_markup=kb,
-        parse_mode="Markdown"
+        f"👤 Выбран курьер ID: {courier_id}\n📅 Выберите период для расчета:",
+        reply_markup=kb
     )
-    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("rep_"))
 async def admin_show_courier_report(callback: types.CallbackQuery):
+    await callback.answer()
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("❌ Нет доступа", show_alert=True)
+        await callback.message.answer("❌ Нет доступа")
         return
 
     parts = callback.data.split("_")
-    target_id = int(parts[1])
+    target_id = parts[1]
     period = parts[2]
 
     days_limit = int(period) if period.isdigit() else None
@@ -591,7 +596,8 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     courier_username = "нет_юзернейма"
 
     for r in reports:
-        if r.get("courier_id") == target_id:
+        r_cid = str(r.get("courier_id", ""))
+        if r_cid == str(target_id):
             r_date_str = r.get("date", "")
             try:
                 r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S")
@@ -633,10 +639,8 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
 
     if orders_count == 0:
         await callback.message.edit_text(
-            f"📭 У курьера **{courier_name}** нет заказов {header_title.lower()}.",
-            parse_mode="Markdown"
+            f"📭 У курьера {courier_name} нет заказов {header_title.lower()}."
         )
-        await callback.answer()
         return
 
     total_deliv = phys_deliv + jur_deliv
@@ -644,26 +648,26 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     earn_fmt = f"{total_earnings:,}".replace(",", " ")
 
     text = (
-        f"📊 **СТАТИСТИКА КУРЬЕРА {header_title}**\n\n"
-        f"🚚 **Курьер:** {courier_name}\n"
-        f"🆔 **ID:** `{target_id}`\n\n"
-        f"📦 Выполнено заказов: **{orders_count}**\n"
-        f"👤 Физ. лицам сдал: **{phys_deliv} шт.**\n"
-        f"🏢 Юр. лицам сдал: **{jur_deliv} шт.**\n"
-        f"💧 **Всего сдано полных:** **{total_deliv} шт.**\n"
-        f"🔄 **Всего собрано пустых:** **{total_returned} шт.**\n"
-        f"💰 Выручка компании: **{rev_fmt} сум**\n\n"
-        f"💵 **Итого заработок:** `{earn_fmt} сум`"
+        f"📊 СТАТИСТИКА КУРЬЕРА {header_title}\n\n"
+        f"🚚 Курьер: {courier_name} (@{courier_username})\n"
+        f"🆔 ID: {target_id}\n\n"
+        f"📦 Выполнено заказов: {orders_count}\n"
+        f"👤 Физ. лицам сдал: {phys_deliv} шт.\n"
+        f"🏢 Юр. лицам сдал: {jur_deliv} шт.\n"
+        f"💧 Всего сдано полных: {total_deliv} шт.\n"
+        f"🔄 Всего собрано пустых: {total_returned} шт.\n"
+        f"💰 Выручка компании: {rev_fmt} сум\n\n"
+        f"💵 Итого заработок: {earn_fmt} сум"
     )
 
-    await callback.message.edit_text(text, parse_mode="Markdown")
-    await callback.answer()
+    await callback.message.edit_text(text)
 
 
 @dp.callback_query(F.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
+    await callback.answer()
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("❌ Нет доступа", show_alert=True)
+        await callback.message.answer("❌ Нет доступа")
         return
 
     today_date = datetime.now().strftime("%Y-%m-%d")
@@ -672,7 +676,7 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
 
     for r in reports:
         if r.get("date", "").startswith(today_date):
-            cid = r.get("courier_id")
+            cid = str(r.get("courier_id", "неизвестно"))
             cname = r.get("courier_name", "Курьер")
             cuser = r.get("courier_username", "нет_юзернейма")
 
@@ -706,10 +710,9 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
 
     if not courier_stats:
         await callback.message.edit_text(f"📭 За сегодня ({today_date}) отчетов еще не поступало.")
-        await callback.answer()
         return
 
-    text = f"📊 **ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):**\n\n"
+    text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
     
     grand_delivered = 0
     grand_returned = 0
@@ -727,9 +730,9 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
         earn_fmt = f"{s['earnings']:,}".replace(",", " ")
 
         text += (
-            f"🚚 **{s['name']}**\n"
-            f"📦 Заказов: **{s['orders']}** | Сдано: **{total_courier_deliv} шт.**\n"
-            f"🔄 Пустых: **{s['returned']} шт.** | Выручка: **{rev_fmt} сум**\n"
+            f"🚚 {s['name']} (@{s['username']})\n"
+            f"📦 Заказов: {s['orders']} | Сдано: {total_courier_deliv} шт. (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
+            f"🔄 Пустых: {s['returned']} шт. | Выручка: {rev_fmt} сум | ЗП: {earn_fmt} сум\n"
             f"───────────────────\n"
         )
 
@@ -737,15 +740,14 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
 
     text += (
-        f"📊 **ИТОГО ПО КОМПАНИИ:**\n"
-        f"💧 Сдано всего полных: **{grand_delivered} шт.**\n"
-        f"🔄 Собрано всего пустых: **{grand_returned} шт.**\n"
-        f"💰 Общая выручка: **{tot_rev_fmt} сум**\n"
-        f"💵 Всего курьерских: **{tot_earn_fmt} сум**"
+        f"📊 ИТОГО ПО КОМПАНИИ:\n"
+        f"💧 Сдано всего полных: {grand_delivered} шт.\n"
+        f"🔄 Собрано всего пустых: {grand_returned} шт.\n"
+        f"💰 Общая выручка: {tot_rev_fmt} сум\n"
+        f"💵 Всего курьерских: {tot_earn_fmt} сум"
     )
 
-    await callback.message.edit_text(text, parse_mode="Markdown")
-    await callback.answer()
+    await callback.message.edit_text(text)
 
 
 # 4. Основная логика бота
@@ -816,7 +818,8 @@ async def check_today_earnings(message: types.Message):
     orders_count = 0
 
     for r in reports:
-        if r.get("courier_id") == user_id and r.get("date", "").startswith(today_date):
+        r_cid = str(r.get("courier_id", ""))
+        if r_cid == str(user_id) and r.get("date", "").startswith(today_date):
             total_earned += r.get("earnings", 0)
             total_delivered += int(r.get("delivered", 0))
             orders_count += 1
@@ -840,8 +843,13 @@ async def main():
     app.router.add_post("/api/report", handle_api_report)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
 
-    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
-    logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
+    # Принудительная перезагрузка вебхука при старте
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_webhook(url=WEBHOOK_URL)
+        logging.info(f"Вебхук успешно установлен на URL: {WEBHOOK_URL}")
+    except Exception as e:
+        logging.error(f"Ошибка при установке вебхука: {e}")
 
     runner = web.AppRunner(app)
     await runner.setup()

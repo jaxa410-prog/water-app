@@ -573,10 +573,16 @@ async def admin_select_period(callback: types.CallbackQuery):
         ]
     )
 
-    await callback.message.edit_text(
-        f"👤 Выбран курьер ID: {courier_id}\n📅 Выберите период для расчета:",
-        reply_markup=kb
-    )
+    try:
+        await callback.message.edit_text(
+            f"👤 Выбран курьер ID: {courier_id}\n📅 Выберите период для расчета:",
+            reply_markup=kb
+        )
+    except Exception:
+        await callback.message.answer(
+            f"👤 Выбран курьер ID: {courier_id}\n📅 Выберите период для расчета:",
+            reply_markup=kb
+        )
 
 
 @dp.callback_query(F.data.startswith("rep_"))
@@ -646,9 +652,11 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     header_title = period_titles.get(period, "ЗА ПЕРИОД")
 
     if orders_count == 0:
-        await callback.message.edit_text(
-            f"📭 У курьера {courier_name} нет заказов {header_title.lower()}."
-        )
+        msg = f"📭 У курьера {courier_name} нет заказов {header_title.lower()}."
+        try:
+            await callback.message.edit_text(msg)
+        except Exception:
+            await callback.message.answer(msg)
         return
 
     total_deliv = phys_deliv + jur_deliv
@@ -668,15 +676,25 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         f"💵 Итого заработок: {earn_fmt} сум"
     )
 
-    await callback.message.edit_text(text)
+    try:
+        await callback.message.edit_text(text)
+    except Exception:
+        await callback.message.answer(text)
 
 
-# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (ИСПРАВЛЕННЫЙ ОБРАБОТЧИК)
+# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (БЕЗОПАСНЫЙ ОБРАБОТЧИК)
 @dp.callback_query(F.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
-    await callback.answer("Загрузка сводки...")
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        await callback.message.answer("❌ Нет доступа")
+        try:
+            await callback.message.answer("❌ Нет доступа")
+        except Exception:
+            pass
         return
 
     try:
@@ -684,7 +702,11 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
         reports = load_reports()
         
         if not reports:
-            await callback.message.edit_text("📭 База данных reports.json пуста.")
+            msg = "📭 База данных reports.json пуста."
+            try:
+                await callback.message.edit_text(msg)
+            except Exception:
+                await callback.message.answer(msg)
             return
 
         courier_stats = {}
@@ -695,7 +717,6 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
                 continue
             r_date_str = str(r.get("date", ""))
             
-            # Проверяем, начинается ли дата отчета с сегодняшнего дня
             if r_date_str.startswith(today_date):
                 matched_reports_count += 1
                 cid = str(r.get("courier_id", "неизвестно"))
@@ -732,11 +753,15 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
 
         if matched_reports_count == 0:
             last_date = reports[-1].get("date", "нет данных") if reports else "нет данных"
-            await callback.message.edit_text(
+            msg = (
                 f"📭 За сегодня (`{today_date}`) отчетов не найдено.\n"
                 f"📅 Последний отчет в базе был от: `{last_date}`\n"
                 f"(Возможна разница часовых поясов на сервере Render)."
             )
+            try:
+                await callback.message.edit_text(msg, parse_mode="Markdown")
+            except Exception:
+                await callback.message.answer(msg, parse_mode="Markdown")
             return
 
         text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
@@ -774,10 +799,17 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
             f"💵 Всего курьерских: {tot_earn_fmt} сум"
         )
 
-        await callback.message.edit_text(text)
+        try:
+            await callback.message.edit_text(text)
+        except Exception:
+            await callback.message.answer(text)
+
     except Exception as e:
         logging.error(f"Ошибка в общем сводном отчете: {e}", exc_info=True)
-        await callback.message.edit_text(f"⚠️ Ошибка формирования отчета: {e}")
+        try:
+            await callback.message.answer(f"⚠️ Ошибка формирования отчета: {e}")
+        except Exception:
+            pass
 
 
 # 4. Основная логика бота
@@ -900,7 +932,6 @@ async def main():
 
     asyncio.create_task(ping_loop())
     
-    # Запуск поллинга через вебхуки (aiohttp держит сервер)
     await asyncio.Event().wait()
 
 if __name__ == "__main__":

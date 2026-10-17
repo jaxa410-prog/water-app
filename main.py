@@ -30,17 +30,18 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 COURIERS_FILE = "couriers.json"
-REPORTS_FILE = "reports.json"
+REPORTS_FILE = "reports.json"  # Хранение всех отчетов
 
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
 
-# Ставки заработка курьера за 1 бутыль (в сумах)
-BONUS_PHYSICAL = 2000
-BONUS_JURIDICAL = 3500
+# Ставки заработка курьера за 1 бутыль/капсулу (в сумах)
+BONUS_PHYSICAL = 2000   # За физ. лицо
+BONUS_JURIDICAL = 3500  # За юр. лицо
 
 
 def load_couriers():
+    """Загрузка списка курьеров из файла"""
     if os.path.exists(COURIERS_FILE):
         try:
             with open(COURIERS_FILE, "r", encoding="utf-8") as f:
@@ -51,11 +52,13 @@ def load_couriers():
 
 
 def save_couriers(couriers):
+    """Сохранение списка курьеров в файл"""
     with open(COURIERS_FILE, "w", encoding="utf-8") as f:
         json.dump(couriers, f, ensure_ascii=False, indent=4)
 
 
 def load_reports():
+    """Загрузка истории отчетов"""
     if os.path.exists(REPORTS_FILE):
         try:
             with open(REPORTS_FILE, "r", encoding="utf-8") as f:
@@ -66,155 +69,261 @@ def load_reports():
 
 
 def save_report_to_db(report_data):
+    """Сохранение отчета в общую базу"""
     reports = load_reports()
     reports.append(report_data)
     with open(REPORTS_FILE, "w", encoding="utf-8") as f:
         json.dump(reports, f, ensure_ascii=False, indent=4)
 
 
-# HTML-код Mini App с исправленной отправкой через tg.sendData
+# Многоязычная HTML-страница Mini App (Русский / O'zbekcha) с исправленной отправкой
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Отчет курьера</title>
+    <title>Отчет курьера / Kuryer hisoboti</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--tg-theme-bg-color, #f4f4f9);
-            color: var(--tg-theme-text-color, #333);
+            background-color: var(--tg-theme-bg-color, #f4f4f5);
+            color: var(--tg-theme-text-color, #000);
             margin: 0;
             padding: 16px;
-            box-sizing: border-box;
         }
         .container {
             max-width: 400px;
             margin: 0 auto;
             background: var(--tg-theme-secondary-bg-color, #ffffff);
             padding: 20px;
-            border-radius: 14px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        .lang-switcher {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 15px;
+        }
+        .lang-switcher select {
+            width: auto;
+            padding: 4px 8px;
+            font-size: 14px;
         }
         h2 {
-            margin: 0 0 20px 0;
-            font-size: 20px;
             text-align: center;
+            font-size: 20px;
+            margin-bottom: 20px;
         }
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 14px;
         }
         label {
             display: block;
-            margin-bottom: 5px;
-            font-weight: 500;
             font-size: 14px;
+            margin-bottom: 6px;
+            font-weight: 500;
         }
         input, select {
             width: 100%;
-            padding: 10px;
+            padding: 10px 12px;
+            box-sizing: border-box;
             border: 1px solid #ccc;
             border-radius: 8px;
-            box-sizing: border-box;
             font-size: 16px;
             background: var(--tg-theme-bg-color, #fff);
             color: var(--tg-theme-text-color, #000);
         }
         button {
             width: 100%;
-            padding: 12px;
             background-color: var(--tg-theme-button-color, #2481cc);
-            color: var(--tg-theme-button-text-color, #ffffff);
+            color: var(--tg-theme-button-text-color, #fff);
             border: none;
-            border-radius: 8px;
+            padding: 14px;
             font-size: 16px;
             font-weight: 600;
+            border-radius: 8px;
             cursor: pointer;
             margin-top: 10px;
+        }
+        button:disabled {
+            background-color: #d1d5db;
+            color: #9ca3af;
+            cursor: not-allowed;
+        }
+        button:active:not(:disabled) {
+            opacity: 0.8;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>💧 Отчет о доставке</h2>
+        <div class="lang-switcher">
+            <select id="langSelect">
+                <option value="uz">🇺🇿 O'zbekcha</option>
+                <option value="ru" selected>🇷🇺 Русский</option>
+            </select>
+        </div>
         
-        <div class="form-group">
-            <label for="clientId">ID абонента / Фирма:</label>
-            <input type="text" id="clientId" placeholder="Введите ID или название">
-        </div>
-
-        <div class="form-group">
-            <label for="deliveredCount">Сдал полных (19л):</label>
-            <input type="number" id="deliveredCount" value="0" min="0" oninput="calculateTotal()">
-        </div>
-
-        <div class="form-group">
-            <label for="returnedCount">Принял пустых (19л):</label>
-            <input type="number" id="returnedCount" value="0" min="0">
-        </div>
-
-        <div class="form-group">
-            <label for="clientType">Тип клиента:</label>
-            <select id="clientType">
-                <option value="Физ. лицо">Физ. лицо</option>
-                <option value="Юр. лицо">Юр. лицо</option>
-            </select>
-        </div>
-
-        <div class="form-group">
-            <label for="paymentType">Тип оплаты:</label>
-            <select id="paymentType">
-                <option value="Наличные">Наличные</option>
-                <option value="Click / Payme">Click / Payme</option>
-                <option value="Перечисление">Перечисление</option>
-            </select>
-        </div>
-
-        <div class="form-group">
-            <label for="totalPrice">Сумма (сум):</label>
-            <input type="number" id="totalPrice" value="0" min="0">
-        </div>
-
-        <button onclick="sendReport()">Отправить отчет</button>
+        <h2 id="t_title">💧 Отчет по доставке</h2>
+        <form id="reportForm">
+            <div class="form-group">
+                <label id="t_clientId" for="clientId">ID абонента / Фирма:</label>
+                <input type="text" id="clientId" required placeholder="Введите ID или название">
+            </div>
+            <div class="form-group">
+                <label id="t_delivered" for="delivered">Сдал полных (19л):</label>
+                <input type="number" id="delivered" min="0" placeholder="0" required>
+            </div>
+            <div class="form-group">
+                <label id="t_returned" for="returned">Принял пустых (19л):</label>
+                <input type="number" id="returned" min="0" placeholder="0" required>
+            </div>
+            <div class="form-group">
+                <label id="t_clientType" for="clientType">Тип клиента:</label>
+                <select id="clientType">
+                    <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
+                    <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label id="t_paymentType" for="paymentType">Тип оплаты:</label>
+                <select id="paymentType">
+                    <option value="Наличные" id="opt_cash">Наличные</option>
+                    <option value="Click/Payme">Click/Payme</option>
+                    <option value="Перечисление" id="opt_bank">Перечисление</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label id="t_totalPrice" for="totalPrice">Сумма (сум):</label>
+                <input type="number" id="totalPrice" min="0" placeholder="0" required>
+            </div>
+            <button type="submit" id="submitBtn" disabled>Отправить отчет</button>
+        </form>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        function calculateTotal() {
-            const delivered = parseInt(document.getElementById('deliveredCount').value) || 0;
-            const pricePerBottle = 23000;
-            document.getElementById('totalPrice').value = delivered * pricePerBottle;
+        const PRICE_PER_BOTTLE = 23000;
+
+        const translations = {
+            ru: {
+                title: "💧 Отчет по доставке",
+                clientId: "ID абонента / Фирма:",
+                clientIdPlaceholder: "Введите ID или название",
+                delivered: "Сдал полных (19л):",
+                returned: "Принял пустых (19л):",
+                clientType: "Тип клиента:",
+                jur: "Юр. лицо",
+                phys: "Физ. лицо",
+                paymentType: "Тип оплаты:",
+                cash: "Наличные",
+                bank: "Перечисление",
+                totalPrice: "Сумма (сум):",
+                submit: "Отправить отчет"
+            },
+            uz: {
+                title: "💧 Yetkazib berish hisoboti",
+                clientId: "Abonent ID / Firma:",
+                clientIdPlaceholder: "ID yoki nomini kiriting",
+                delivered: "To'liq topshirildi (19l):",
+                returned: "Bo'sh qabul qilindi (19l):",
+                clientType: "Mijoz turi:",
+                jur: "Yuridik shaxs",
+                phys: "Jismoniy shaxs",
+                paymentType: "To'lov turi:",
+                cash: "Naqd pul",
+                bank: "Pul o'tkazmasi",
+                totalPrice: "Summa (so'm):",
+                submit: "Hisobotni yuborish"
+            }
+        };
+
+        const langSelect = document.getElementById('langSelect');
+        const t_title = document.getElementById('t_title');
+        const t_clientId = document.getElementById('t_clientId');
+        const clientIdInput = document.getElementById('clientId');
+        const t_delivered = document.getElementById('t_delivered');
+        const t_returned = document.getElementById('t_returned');
+        const t_clientType = document.getElementById('t_clientType');
+        const opt_jur = document.getElementById('opt_jur');
+        const opt_phys = document.getElementById('opt_phys');
+        const t_paymentType = document.getElementById('t_paymentType');
+        const opt_cash = document.getElementById('opt_cash');
+        const opt_bank = document.getElementById('opt_bank');
+        const t_totalPrice = document.getElementById('t_totalPrice');
+        const deliveredInput = document.getElementById('delivered');
+        const returnedInput = document.getElementById('returned');
+        const totalPriceInput = document.getElementById('totalPrice');
+        const submitBtn = document.getElementById('submitBtn');
+
+        function setLanguage(lang) {
+            const t = translations[lang];
+            t_title.innerText = t.title;
+            t_clientId.innerText = t.clientId;
+            clientIdInput.placeholder = t.clientIdPlaceholder;
+            t_delivered.innerText = t.delivered;
+            t_returned.innerText = t.returned;
+            t_clientType.innerText = t.clientType;
+            opt_jur.innerText = t.jur;
+            opt_phys.innerText = t.phys;
+            t_paymentType.innerText = t.paymentType;
+            opt_cash.innerText = t.cash;
+            opt_bank.innerText = t.bank;
+            t_totalPrice.innerText = t.totalPrice;
+            submitBtn.innerText = t.submit;
         }
 
-        function sendReport() {
-            const clientId = document.getElementById('clientId').value.trim();
-            if (!clientId) {
-                alert('Пожалуйста, введите ID или название клиента!');
-                return;
+        langSelect.addEventListener('change', function() {
+            setLanguage(this.value);
+        });
+
+        function validateForm() {
+            const clientIdVal = clientIdInput.value.trim();
+            const deliveredVal = deliveredInput.value.trim();
+            const returnedVal = returnedInput.value.trim();
+            
+            if (clientIdVal !== "" && deliveredVal !== "" && returnedVal !== "") {
+                submitBtn.removeAttribute('disabled');
+            } else {
+                submitBtn.setAttribute('disabled', 'true');
             }
+        }
+
+        deliveredInput.addEventListener('input', function() {
+            const count = parseInt(deliveredInput.value) || 0;
+            totalPriceInput.value = count * PRICE_PER_BOTTLE;
+            validateForm();
+        });
+
+        clientIdInput.addEventListener('input', validateForm);
+        returnedInput.addEventListener('input', validateForm);
+
+        document.getElementById('reportForm').addEventListener('submit', function(e) {
+            e.preventDefault();
 
             const data = {
-                client_id: clientId,
-                delivered: document.getElementById('deliveredCount').value,
-                returned: document.getElementById('returnedCount').value,
+                client_id: clientIdInput.value,
+                delivered: deliveredInput.value,
+                returned: returnedInput.value,
                 client_type: document.getElementById('clientType').value,
                 payment_type: document.getElementById('paymentType').value,
-                total_price: document.getElementById('totalPrice').value
+                total_price: totalPriceInput.value
             };
 
             // Передаем данные боту через официальный метод Telegram WebApp
             tg.sendData(JSON.stringify(data));
             tg.close();
-        }
+        });
     </script>
 </body>
 </html>
 """
 
+# 1. Веб-сервер
 async def handle_index(request):
     return web.Response(text=HTML_CONTENT, content_type="text/html")
 
@@ -232,23 +341,49 @@ async def handle_webhook(request):
         return web.Response(text=str(e), status=500)
 
 
+# 2. Команды управления курьерами
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав администратора.")
         return
+
     args = message.text.split()
     if len(args) < 2 or not args[1].isdigit():
-        await message.answer("⚠️ Использование: `/add ТЕЛЕГРАМ_ID`", parse_mode="Markdown")
+        await message.answer("⚠️ Использование: `/add ТЕЛЕГРАМ_ID`\nПример: `/add 123456789`", parse_mode="Markdown")
         return
+
     new_id = int(args[1])
     couriers = load_couriers()
+
     if new_id in couriers:
         await message.answer(f"ℹ️ Курьер с ID `{new_id}` уже есть в списке.", parse_mode="Markdown")
     else:
         couriers.append(new_id)
         save_couriers(couriers)
-        await message.answer(f"✅ Курьер с ID `{new_id}` успешно добавлен!", parse_mode="Markdown")
+        await message.answer(f"✅ Курьер с ID `{new_id}` успешно добавлен в систему!", parse_mode="Markdown")
+
+
+@dp.message(Command("remove"))
+async def cmd_remove_courier(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        await message.answer("⚠️ Использование: `/remove ТЕЛЕГРАМ_ID`\nПример: `/remove 123456789`", parse_mode="Markdown")
+        return
+
+    target_id = int(args[1])
+    couriers = load_couriers()
+
+    if target_id in couriers:
+        couriers.remove(target_id)
+        save_couriers(couriers)
+        await message.answer(f"🗑 Курьер с ID `{target_id}` удален из системы.", parse_mode="Markdown")
+    else:
+        await message.answer(f"⚠️ Курьер с ID `{target_id}` не найден в списке.", parse_mode="Markdown")
 
 
 @dp.message(Command("list"))
@@ -256,6 +391,7 @@ async def cmd_list_couriers(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав администратора.")
         return
+
     couriers = load_couriers()
     if not couriers:
         await message.answer("📭 Список курьеров пуст.")
@@ -264,6 +400,258 @@ async def cmd_list_couriers(message: types.Message):
         await message.answer(text, parse_mode="Markdown")
 
 
+# 3. Интерактивная Панель Админа (Выбор курьера)
+@dp.message(Command("stats"))
+@dp.message(F.text == "📊 Статистика админа")
+async def admin_panel_select_courier(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+
+    reports = load_reports()
+    courier_map = {}
+
+    for r in reports:
+        cid = r.get("courier_id")
+        if cid:
+            cname = r.get("courier_name", "Курьер")
+            cuser = r.get("courier_username", "нет_юзернейма")
+            courier_map[cid] = f"{cname} (@{cuser})"
+
+    inline_keyboard = []
+    
+    inline_keyboard.append([
+        InlineKeyboardButton(text="🏢 Общий сводный отчет (За сегодня)", callback_data="admin_stat_today_all")
+    ])
+
+    for cid, label in courier_map.items():
+        inline_keyboard.append([
+            InlineKeyboardButton(text=f"🚚 {label}", callback_data=f"sel_cour_{cid}")
+        ])
+
+    if not courier_map:
+        await message.answer("📭 В системе пока нет ни одного опубликованного отчета.")
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    await message.answer("👥 **Панель администратора:**\nВыберите курьера для просмотра статистики:", reply_markup=kb, parse_mode="Markdown")
+
+
+@dp.callback_query(F.data.startswith("sel_cour_"))
+async def admin_select_period(callback: types.CallbackQuery):
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    courier_id = callback.data.split("_")[2]
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📅 За сегодня", callback_data=f"rep_{courier_id}_1"),
+                InlineKeyboardButton(text="📅 За неделю (7д)", callback_data=f"rep_{courier_id}_7")
+            ],
+            [
+                InlineKeyboardButton(text="📅 За 15 дней", callback_data=f"rep_{courier_id}_15"),
+                InlineKeyboardButton(text="📅 За месяц (30д)", callback_data=f"rep_{courier_id}_30")
+            ],
+            [
+                InlineKeyboardButton(text="📅 За всё время", callback_data=f"rep_{courier_id}_all")
+            ]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"👤 **Выбран курьер ID:** `{courier_id}`\n📅 Выберите период для расчета:",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("rep_"))
+async def admin_show_courier_report(callback: types.CallbackQuery):
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    parts = callback.data.split("_")
+    target_id = int(parts[1])
+    period = parts[2]
+
+    days_limit = int(period) if period.isdigit() else None
+    reports = load_reports()
+    now = datetime.now()
+
+    phys_deliv = 0
+    jur_deliv = 0
+    total_returned = 0
+    total_revenue = 0
+    total_earnings = 0
+    orders_count = 0
+    courier_name = "Курьер"
+    courier_username = "нет_юзернейма"
+
+    for r in reports:
+        if r.get("courier_id") == target_id:
+            r_date_str = r.get("date", "")
+            try:
+                r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+
+            if days_limit:
+                cutoff = now - timedelta(days=days_limit)
+                if r_date < cutoff:
+                    continue
+
+            courier_name = r.get("courier_name", courier_name)
+            courier_username = r.get("courier_username", courier_username)
+
+            deliv = int(r.get("delivered", 0))
+            ret = int(r.get("returned", 0))
+            ctype = r.get("client_type", "Физ. лицо")
+            rev = int(r.get("total_price", 0))
+            earn = int(r.get("earnings", 0))
+
+            if ctype == "Юр. лицо":
+                jur_deliv += deliv
+            else:
+                phys_deliv += deliv
+
+            total_returned += ret
+            total_revenue += rev
+            total_earnings += earn
+            orders_count += 1
+
+    period_titles = {
+        "1": "ЗА СЕГОДНЯ",
+        "7": "ЗА НЕДЕЛЮ (7 ДНЕЙ)",
+        "15": "ЗА 15 ДНЕЙ",
+        "30": "ЗА МЕСЯЦ (30 ДНЕЙ)",
+        "all": "ЗА ВСЁ ВРЕМЯ"
+    }
+    header_title = period_titles.get(period, "ЗА ПЕРИОД")
+
+    if orders_count == 0:
+        await callback.message.edit_text(
+            f"📭 У курьера **{courier_name}** (@{courier_username}) нет заказов {header_title.lower()}.",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    total_deliv = phys_deliv + jur_deliv
+    rev_fmt = f"{total_revenue:,}".replace(",", " ")
+    earn_fmt = f"{total_earnings:,}".replace(",", " ")
+
+    text = (
+        f"📊 **СТАТИСТИКА КУРЬЕРА {header_title}**\n\n"
+        f"🚚 **Курьер:** {courier_name} (@{courier_username})\n"
+        f"🆔 **ID:** `{target_id}`\n\n"
+        f"📦 Выполнено заказов: **{orders_count}**\n"
+        f"👤 Физ. лицам сдал: **{phys_deliv} шт.**\n"
+        f"🏢 Юр. лицам сдал: **{jur_deliv} шт.**\n"
+        f"💧 **Всего сдано полных:** **{total_deliv} шт.**\n"
+        f"🔄 **Всего собрано пустых:** **{total_returned} шт.**\n"
+        f"💰 Выручка компании: **{rev_fmt} сум**\n\n"
+        f"💵 **Итого заработок (Зарплата):** `{earn_fmt} сум`"
+    )
+
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_stat_today_all")
+async def admin_stat_today_all_handler(callback: types.CallbackQuery):
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    reports = load_reports()
+
+    courier_stats = {}
+
+    for r in reports:
+        if r.get("date", "").startswith(today_date):
+            cid = r.get("courier_id")
+            cname = r.get("courier_name", "Курьер")
+            cuser = r.get("courier_username", "нет_юзернейма")
+
+            if cid not in courier_stats:
+                courier_stats[cid] = {
+                    "name": cname,
+                    "username": cuser,
+                    "phys_delivered": 0,
+                    "jur_delivered": 0,
+                    "returned": 0,
+                    "revenue": 0,
+                    "earnings": 0,
+                    "orders": 0
+                }
+
+            deliv = int(r.get("delivered", 0))
+            ret = int(r.get("returned", 0))
+            ctype = r.get("client_type", "Физ. лицо")
+            rev = int(r.get("total_price", 0))
+            earn = int(r.get("earnings", 0))
+
+            if ctype == "Юр. лицо":
+                courier_stats[cid]["jur_delivered"] += deliv
+            else:
+                courier_stats[cid]["phys_delivered"] += deliv
+
+            courier_stats[cid]["returned"] += ret
+            courier_stats[cid]["revenue"] += rev
+            courier_stats[cid]["earnings"] += earn
+            courier_stats[cid]["orders"] += 1
+
+    if not courier_stats:
+        await callback.message.edit_text(f"📭 За сегодня ({today_date}) отчетов еще не поступало.")
+        await callback.answer()
+        return
+
+    text = f"📊 **ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):**\n\n"
+    
+    grand_delivered = 0
+    grand_returned = 0
+    grand_revenue = 0
+    grand_earnings = 0
+
+    for cid, s in courier_stats.items():
+        total_courier_deliv = s["phys_delivered"] + s["jur_delivered"]
+        grand_delivered += total_courier_deliv
+        grand_returned += s["returned"]
+        grand_revenue += s["revenue"]
+        grand_earnings += s["earnings"]
+
+        rev_fmt = f"{s['revenue']:,}".replace(",", " ")
+        earn_fmt = f"{s['earnings']:,}".replace(",", " ")
+
+        text += (
+            f"🚚 **{s['name']}** (@{s['username']})\n"
+            f"📦 Заказов: **{s['orders']}** | Сдано: **{total_courier_deliv} шт.** (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
+            f"🔄 Пустых: **{s['returned']} шт.** | Выручка: **{rev_fmt} сум** | ЗП: `{earn_fmt} сум`\n"
+            f"───────────────────\n"
+        )
+
+    tot_rev_fmt = f"{grand_revenue:,}".replace(",", " ")
+    tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
+
+    text += (
+        f"📊 **ИТОГО ПО КОМПАНИИ:**\n"
+        f"💧 Сдано всего полных: **{grand_delivered} шт.**\n"
+        f"🔄 Собрано всего пустых: **{grand_returned} шт.**\n"
+        f"💰 Общая выручка: **{tot_rev_fmt} сум**\n"
+        f"💵 Всего курьерских: **{tot_earn_fmt} сум**"
+    )
+
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await callback.answer()
+
+
+# 4. Основная логика бота
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -271,38 +659,82 @@ async def cmd_start(message: types.Message):
 
     if couriers and user_id not in couriers:
         if not (ADMIN_IDS and user_id in ADMIN_IDS):
-            await message.answer(f"⛔️ У вас нет доступа.\nВаш Telegram ID: `{user_id}`", parse_mode="Markdown")
+            await message.answer(
+                f"⛔️ У вас нет доступа к системе отчетов.\nВаш Telegram ID: `{user_id}`", 
+                parse_mode="Markdown"
+            )
             return
 
     buttons = [
+        [KeyboardButton(text="💰 Мой заработок за сегодня")],
         [KeyboardButton(text="📦 Открыть отчет / Hisobotni ochish")]
     ]
+    
     if not ADMIN_IDS or user_id in ADMIN_IDS:
         buttons.insert(0, [KeyboardButton(text="📊 Статистика админа")])
 
     markup = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-    
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📦 Заполнить отчет (Mini App)", web_app=WebAppInfo(url=WEB_SERVER_HOST))]
+            [
+                InlineKeyboardButton(
+                    text="📦 Заполнить отчет (Mini App)",
+                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
+                )
+            ]
         ]
     )
     
-    await message.answer("👋 Добро пожаловать! Используйте меню ниже:", reply_markup=markup)
-    await message.answer("Форма отчета:", reply_markup=keyboard)
+    await message.answer(
+        "👋 Добро пожаловать!\nИспользуйте кнопку ниже для отправки отчета или меню для проверки статистики.", 
+        reply_markup=keyboard
+    )
+    await message.answer("Меню управления:", reply_markup=markup)
 
 
 @dp.message(F.text == "📦 Открыть отчет / Hisobotni ochish")
 async def open_report_btn(message: types.Message):
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📦 Заполнить отчет (Mini App)", web_app=WebAppInfo(url=WEB_SERVER_HOST))]
+            [
+                InlineKeyboardButton(
+                    text="📦 Заполнить отчет (Mini App)",
+                    web_app=WebAppInfo(url=WEB_SERVER_HOST)
+                )
+            ]
         ]
     )
-    await message.answer("Нажмите на кнопку ниже, чтобы открыть форму:", reply_markup=keyboard)
+    await message.answer("Нажмите на кнопку ниже, чтобы открыть форму отчета:", reply_markup=keyboard)
 
 
-# Обработка данных, поступающих из WebApp
+@dp.message(F.text == "💰 Мой заработок за сегодня")
+async def check_today_earnings(message: types.Message):
+    user_id = message.from_user.id
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    
+    reports = load_reports()
+    total_earned = 0
+    total_delivered = 0
+    orders_count = 0
+
+    for r in reports:
+        if r.get("courier_id") == user_id and r.get("date", "").startswith(today_date):
+            total_earned += r.get("earnings", 0)
+            total_delivered += int(r.get("delivered", 0))
+            orders_count += 1
+
+    formatted_earnings = f"{total_earned:,}".replace(",", " ")
+
+    await message.answer(
+        f"📊 **Ваша статистика за сегодня ({today_date}):**\n\n"
+        f"📦 Успешных заказов: **{orders_count}**\n"
+        f"💧 Доставлено бутылей (19л): **{total_delivered} шт.**\n"
+        f"💵 **Заработано за сегодня:** `{formatted_earnings} сум`",
+        parse_mode="Markdown"
+    )
+
+
 @dp.message(F.web_app_data)
 async def handle_web_app_data(message: types.Message):
     try:
@@ -357,7 +789,7 @@ async def handle_web_app_data(message: types.Message):
             f"👥 **Тип клиента:** {client_type}\n"
             f"💳 **Тип оплаты:** {payment_type}\n"
             f"💰 **Сумма заказа:** {formatted_price} сум\n"
-            f"💵 **Заработок курьера:** `{formatted_earnings} сум`"
+            f"💵 **Заработок курьера:** `{formatted_earnings} сум` ({rate:,} сум/шт)"
         )
 
         await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
@@ -374,6 +806,7 @@ async def handle_web_app_data(message: types.Message):
         await message.answer(f"❌ Произошла ошибка при сохранении отчета: {e}")
 
 
+# 5. Запуск и приветствие при рестарте
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
@@ -389,7 +822,6 @@ async def main():
     await site.start()
     logging.info(f"Веб-сервер запущен на порту {PORT}")
 
-    # Пинг-цикл для предотвращения засыпания на Render
     async def ping_loop():
         await asyncio.sleep(10)
         import aiohttp
@@ -407,6 +839,6 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        async asyncio.run(main())
+        asyncio.run(main())
     finally:
-        asyncio.run(bot.session.close())
+        pass

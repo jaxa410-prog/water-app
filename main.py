@@ -30,18 +30,17 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 COURIERS_FILE = "couriers.json"
-REPORTS_FILE = "reports.json"  # Хранение всех отчетов
+REPORTS_FILE = "reports.json"
 
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
 
-# Ставки заработка курьера за 1 бутыль/капсулу (в сумах)
-BONUS_PHYSICAL = 2000   # За физ. лицо
-BONUS_JURIDICAL = 3500  # За юр. лицо
+# Ставки заработка курьера
+BONUS_PHYSICAL = 2000
+BONUS_JURIDICAL = 3500
 
 
 def load_couriers():
-    """Загрузка списка курьеров из файла"""
     if os.path.exists(COURIERS_FILE):
         try:
             with open(COURIERS_FILE, "r", encoding="utf-8") as f:
@@ -52,13 +51,11 @@ def load_couriers():
 
 
 def save_couriers(couriers):
-    """Сохранение списка курьеров в файл"""
     with open(COURIERS_FILE, "w", encoding="utf-8") as f:
         json.dump(couriers, f, ensure_ascii=False, indent=4)
 
 
 def load_reports():
-    """Загрузка истории отчетов"""
     if os.path.exists(REPORTS_FILE):
         try:
             with open(REPORTS_FILE, "r", encoding="utf-8") as f:
@@ -69,14 +66,13 @@ def load_reports():
 
 
 def save_report_to_db(report_data):
-    """Сохранение отчета в общую базу"""
     reports = load_reports()
     reports.append(report_data)
     with open(REPORTS_FILE, "w", encoding="utf-8") as f:
         json.dump(reports, f, ensure_ascii=False, indent=4)
 
 
-# HTML-страница Mini App
+# HTML Mini App с отправкой через fetch API
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -299,10 +295,17 @@ HTML_CONTENT = """
         clientIdInput.addEventListener('input', validateForm);
         returnedInput.addEventListener('input', validateForm);
 
-        document.getElementById('reportForm').addEventListener('submit', function(e) {
+        document.getElementById('reportForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+            submitBtn.disabled = true;
+            submitBtn.innerText = "Отправка...";
+
+            const user = tg.initDataUnsafe?.user || {};
 
             const data = {
+                user_id: user.id,
+                user_name: [user.first_name, user.last_name].filter(Boolean).join(" ") || "Курьер",
+                username: user.username || "нет_юзернейма",
                 client_id: clientIdInput.value,
                 delivered: deliveredInput.value,
                 returned: returnedInput.value,
@@ -311,8 +314,23 @@ HTML_CONTENT = """
                 total_price: totalPriceInput.value
             };
 
-            tg.sendData(JSON.stringify(data));
-            tg.close();
+            try {
+                const response = await fetch('/api/report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    tg.close();
+                } else {
+                    alert("Ошибка отправки! Попробуйте снова.");
+                    submitBtn.disabled = false;
+                }
+            } catch (err) {
+                alert("Ошибка соединения с сервером.");
+                submitBtn.disabled = false;
+            }
         });
     </script>
 </body>
@@ -336,8 +354,81 @@ async def handle_webhook(request):
         logging.error(f"Ошибка вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
+# Обработчик API запроса из формы Mini App
+async def handle_api_report(request):
+    try:
+        data = await request.json()
+        sender_id = data.get("user_id")
+        
+        couriers = load_couriers()
+        if couriers and sender_id not in couriers:
+            if not (ADMIN_IDS and sender_id in ADMIN_IDS):
+                return web.json_response({"status": "error", "message": "Access denied"}, status=403)
 
-# 2. Команды управления курьерами
+        client_id = str(data.get("client_id", "Не указан"))
+        delivered = int(data.get("delivered", 0))
+        returned = int(data.get("returned", 0))
+        client_type = str(data.get("client_type", "Физ. лицо"))
+        payment_type = str(data.get("payment_type", "Наличные"))
+        total_price = int(data.get("total_price", 0))
+        
+        courier_name = data.get("user_name", "Курьер")
+        courier_username = data.get("username", "нет_юзернейма")
+        
+        rate = BONUS_JURIDICAL if client_type == "Юр. лицо" else BONUS_PHYSICAL
+        courier_earnings = delivered * rate
+        
+        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        report_record = {
+            "date": current_datetime,
+            "courier_id": sender_id,
+            "courier_name": courier_name,
+            "courier_username": courier_username,
+            "client_id": client_id,
+            "delivered": delivered,
+            "returned": returned,
+            "client_type": client_type,
+            "payment_type": payment_type,
+            "total_price": total_price,
+            "earnings": courier_earnings
+        }
+        save_report_to_db(report_record)
+
+        formatted_price = f"{total_price:,}".replace(",", " ")
+        formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
+        
+        report_text = (
+            f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
+            f"👤 **Курьер:** {courier_name} (@{courier_username})\n"
+            f"🆔 **ID / Фирма:** `{client_id}`\n"
+            f"💧 **Сдал полных (19л):** {delivered} шт.\n"
+            f"🔄 **Принял пустых (19л):** {returned} шт.\n"
+            f"👥 **Тип клиента:** {client_type}\n"
+            f"💳 **Тип оплаты:** {payment_type}\n"
+            f"💰 **Сумма заказа:** {formatted_price} сум\n"
+            f"💵 **Заработок курьера:** `{formatted_earnings} сум`"
+        )
+
+        # Отправляем курьеру в ЛС
+        if sender_id:
+            await bot.send_message(chat_id=sender_id, text=f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
+
+        # Отправляем в Канал
+        if CHANNEL_ID:
+            try:
+                target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
+                await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
+            except Exception as channel_err:
+                logging.error(f"Ошибка при отправке в канал CHANNEL_ID: {channel_err}")
+
+        return web.json_response({"status": "ok"})
+    except Exception as e:
+        logging.error(f"Ошибка сохранения отчета: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+# 2. Команды админа
 @dp.message(Command("add"))
 async def cmd_add_courier(message: types.Message):
     if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
@@ -730,82 +821,12 @@ async def check_today_earnings(message: types.Message):
     )
 
 
-@dp.message(F.web_app_data)
-async def handle_web_app_data(message: types.Message):
-    try:
-        data = json.loads(message.web_app_data.data)
-        sender_id = message.from_user.id
-        couriers = load_couriers()
-
-        if couriers and sender_id not in couriers:
-            if not (ADMIN_IDS and sender_id in ADMIN_IDS):
-                await message.answer("❌ Ошибка безопасности: ваш ID не найден в списке курьеров.")
-                return
-
-        client_id = str(data.get("client_id", "Не указан"))
-        delivered = int(data.get("delivered", 0))
-        returned = int(data.get("returned", 0))
-        client_type = str(data.get("client_type", "Физ. лицо"))
-        payment_type = str(data.get("payment_type", "Наличные"))
-        total_price = int(data.get("total_price", 0))
-        
-        courier_name = message.from_user.full_name
-        courier_username = message.from_user.username or 'нет_юзернейма'
-        
-        rate = BONUS_JURIDICAL if client_type == "Юр. лицо" else BONUS_PHYSICAL
-        courier_earnings = delivered * rate
-        
-        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        report_record = {
-            "date": current_datetime,
-            "courier_id": sender_id,
-            "courier_name": courier_name,
-            "courier_username": courier_username,
-            "client_id": client_id,
-            "delivered": delivered,
-            "returned": returned,
-            "client_type": client_type,
-            "payment_type": payment_type,
-            "total_price": total_price,
-            "earnings": courier_earnings
-        }
-        save_report_to_db(report_record)
-
-        formatted_price = f"{total_price:,}".replace(",", " ")
-        formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
-        
-        report_text = (
-            f"📋 **ОТЧЕТ О ДОСТАВКЕ (19л)**\n\n"
-            f"👤 **Курьер:** {courier_name}\n"
-            f"🆔 **ID / Фирма:** `{client_id}`\n"
-            f"💧 **Сдал полных (19л):** {delivered} шт.\n"
-            f"🔄 **Принял пустых (19л):** {returned} шт.\n"
-            f"👥 **Тип клиента:** {client_type}\n"
-            f"💳 **Тип оплаты:** {payment_type}\n"
-            f"💰 **Сумма заказа:** {formatted_price} сум\n"
-            f"💵 **Заработок курьера:** `{formatted_earnings} сум`"
-        )
-
-        await message.answer(f"✅ **Отчет успешно отправлен!**\n\n{report_text}", parse_mode="Markdown")
-
-        if CHANNEL_ID:
-            try:
-                target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
-                await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
-            except Exception as channel_err:
-                logging.error(f"Ошибка при отправке в канал CHANNEL_ID: {channel_err}")
-
-    except Exception as e:
-        logging.error(f"Ошибка обработки отчета: {e}")
-        await message.answer(f"❌ Произошла ошибка при сохранении отчета: {e}")
-
-
 # 5. Запуск
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
+    app.router.add_post("/api/report", handle_api_report)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
 
     await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)

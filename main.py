@@ -35,9 +35,9 @@ REPORTS_FILE = "reports.json"
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
 
-# Ставки заработка курьера
-BONUS_PHYSICAL = 2000
-BONUS_JURIDICAL = 3500
+# Измененные ставки заработка курьера за 1 бутыль (в сумах)
+BONUS_PHYSICAL = 3500   # За физ. лицо (теперь 3500 сум)
+BONUS_JURIDICAL = 2000  # За юр. лицо (теперь 2000 сум)
 
 
 def load_couriers():
@@ -420,14 +420,14 @@ async def handle_api_report(request):
             f"💵 Заработок курьера: {formatted_earnings} сум"
         )
 
-        # Отправляем курьеру в ЛС (обычный текст без parse_mode)
+        # Отправляем курьеру в ЛС
         if sender_id:
             try:
                 await bot.send_message(chat_id=sender_id, text=f"✅ Отчет успешно отправлен!\n\n{report_text}")
             except Exception as e:
                 logging.error(f"Не удалось отправить сообщение курьеру {sender_id}: {e}")
 
-        # Отправляем в Канал (обычный текст без parse_mode)
+        # Отправляем в Канал
         if CHANNEL_ID:
             try:
                 target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID

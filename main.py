@@ -125,7 +125,7 @@ def save_report_to_db(report_data):
     except Exception as e:
         logging.error(f"Ошибка записи отчета в Supabase: {e}")
 
-# ПРЕМИУМ HTML MINI APP С НОВЫМ ДИЗАЙНОМ И ФУНКЦИОНАЛОМ
+# ПРЕМИУМ HTML MINI APP
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -344,17 +344,17 @@ HTML_CONTENT = """
         <form id="reportForm">
             <div class="form-group">
                 <label id="t_clientId">ID Абонента / Фирма</label>
-                <input type="text" id="clientId" placeholder="Например: 1045 или ООО Восток" required autocomplete="off">
+                <input type="text" id="clientId" placeholder="Например: 1045 или Avesta" required autocomplete="off">
             </div>
 
             <div class="form-group">
                 <label id="t_delivered">Сдал полных (19л)</label>
-                <input type="number" id="delivered" placeholder="0" min="0" required>
+                <input type="number" id="delivered" placeholder="0" min="2" required>
                 <div class="quick-chips">
-                    <div class="chip" onclick="addQty('delivered', 1)">+1</div>
-                    <div class="chip" onclick="addQty('delivered', 2)">+2</div>
-                    <div class="chip" onclick="addQty('delivered', 5)">+5</div>
-                    <div class="chip" onclick="setQty('delivered', 10)">10</div>
+                    <div class="chip" onclick="setQty('delivered', 2)">2</div>
+                    <div class="chip" onclick="setQty('delivered', 3)">3</div>
+                    <div class="chip" onclick="setQty('delivered', 4)">4</div>
+                    <div class="chip" onclick="setQty('delivered', 5)">5</div>
                     <div class="chip" onclick="setQty('delivered', 0)">Сброс</div>
                 </div>
             </div>
@@ -363,10 +363,11 @@ HTML_CONTENT = """
                 <label id="t_returned">Принял пустых (19л)</label>
                 <input type="number" id="returned" placeholder="0" min="0" required>
                 <div class="quick-chips">
-                    <div class="chip" onclick="addQty('returned', 1)">+1</div>
-                    <div class="chip" onclick="addQty('returned', 2)">+2</div>
-                    <div class="chip" onclick="addQty('returned', 5)">+5</div>
-                    <div class="chip" onclick="setQty('returned', 10)">10</div>
+                    <div class="chip" onclick="setQty('returned', 1)">1</div>
+                    <div class="chip" onclick="setQty('returned', 2)">2</div>
+                    <div class="chip" onclick="setQty('returned', 3)">3</div>
+                    <div class="chip" onclick="setQty('returned', 4)">4</div>
+                    <div class="chip" onclick="setQty('returned', 5)">5</div>
                     <div class="chip" onclick="setQty('returned', 0)">Сброс</div>
                 </div>
             </div>
@@ -408,7 +409,7 @@ HTML_CONTENT = """
             ru: {
                 title: "Отчет курьера",
                 clientId: "ID Абонента / Фирма",
-                clientIdPlaceholder: "Например: 1045 или ООО Восток",
+                clientIdPlaceholder: "Например: 1045 или Avesta",
                 delivered: "Сдал полных (19л)",
                 returned: "Принял пустых (19л)",
                 clientType: "Тип клиента",
@@ -424,7 +425,7 @@ HTML_CONTENT = """
             uz: {
                 title: "Kuryer hisoboti",
                 clientId: "Abonent ID / Firma",
-                clientIdPlaceholder: "Masalan: 1045 yoki Mas'uliyatli MCHJ",
+                clientIdPlaceholder: "Masalan: 1045 yoki Avesta",
                 delivered: "Topshirildi (19l)",
                 returned: "Qabul qilindi (19l)",
                 clientType: "Mijoz turi",
@@ -482,13 +483,6 @@ HTML_CONTENT = """
             }
             validateForm();
         });
-
-        function addQty(id, val) {
-            const el = document.getElementById(id);
-            let current = parseInt(el.value) || 0;
-            el.value = current + val;
-            updateCalc();
-        }
 
         function setQty(id, val) {
             const el = document.getElementById(id);

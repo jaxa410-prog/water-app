@@ -20,7 +20,6 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-# Порт Render по умолчанию — 10000
 PORT = int(os.getenv("PORT", 10000))
 
 WEB_SERVER_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://water-bot-e0ff.onrender.com").rstrip("/")
@@ -36,7 +35,7 @@ REPORTS_FILE = "reports.json"
 ENV_ADMINS = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(i.strip()) for i in ENV_ADMINS.split(",") if i.strip().isdigit()]
 
-# Ставки заработка курьера за 1 бутыль
+# Актуальные ставки заработка курьера за 1 бутыль (в сумах)
 BONUS_PHYSICAL = 3500   # За физ. лицо — 3500 сум
 BONUS_JURIDICAL = 2000  # За юр. лицо — 2000 сум
 
@@ -618,7 +617,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
             rev = int(r.get("total_price", 0))
             earn = int(r.get("earnings", 0))
 
-            if ctype == "Юр. лицо":
+            if "Юр" in ctype:
                 jur_deliv += deliv
             else:
                 phys_deliv += deliv
@@ -675,10 +674,11 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     courier_stats = {}
 
     for r in reports:
-        if r.get("date", "").startswith(today_date):
+        r_date = str(r.get("date", ""))
+        if today_date in r_date:
             cid = str(r.get("courier_id", "неизвестно"))
-            cname = r.get("courier_name", "Курьер")
-            cuser = r.get("courier_username", "нет_юзернейма")
+            cname = str(r.get("courier_name", "Курьер"))
+            cuser = str(r.get("courier_username", "нет_юзернейма"))
 
             if cid not in courier_stats:
                 courier_stats[cid] = {
@@ -692,13 +692,17 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
                     "orders": 0
                 }
 
-            deliv = int(r.get("delivered", 0))
-            ret = int(r.get("returned", 0))
-            ctype = r.get("client_type", "Физ. лицо")
-            rev = int(r.get("total_price", 0))
-            earn = int(r.get("earnings", 0))
+            try:
+                deliv = int(r.get("delivered", 0))
+                ret = int(r.get("returned", 0))
+                rev = int(r.get("total_price", 0))
+                earn = int(r.get("earnings", 0))
+            except (ValueError, TypeError):
+                continue
 
-            if ctype == "Юр. лицо":
+            ctype = str(r.get("client_type", "Физ. лицо"))
+
+            if "Юр" in ctype:
                 courier_stats[cid]["jur_delivered"] += deliv
             else:
                 courier_stats[cid]["phys_delivered"] += deliv
@@ -819,8 +823,8 @@ async def check_today_earnings(message: types.Message):
 
     for r in reports:
         r_cid = str(r.get("courier_id", ""))
-        if r_cid == str(user_id) and r.get("date", "").startswith(today_date):
-            total_earned += r.get("earnings", 0)
+        if r_cid == str(user_id) and str(r.get("date", "")).startswith(today_date):
+            total_earned += int(r.get("earnings", 0))
             total_delivered += int(r.get("delivered", 0))
             orders_count += 1
 
@@ -843,7 +847,6 @@ async def main():
     app.router.add_post("/api/report", handle_api_report)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
 
-    # Принудительная перезагрузка вебхука при старте
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.set_webhook(url=WEBHOOK_URL)

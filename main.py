@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+import aiohttp
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -728,7 +729,6 @@ async def handle_courier_period(message: types.Message, state: FSMContext):
         return
 
     days = 1 if message.text == "📅 За сегодня" else 7
-    # Сохраняем выбранный период в состояние и предлагаем формат вывода
     await state.update_data(selected_days=days)
     await state.set_state(CourierStatStates.waiting_for_action)
 
@@ -886,8 +886,6 @@ async def main():
 
     async def ping_loop():
         await asyncio.sleep(10)
-        import aiohttp
-        async import aiohttp
         async with aiohttp.ClientSession() as session:
             while True:
                 try:

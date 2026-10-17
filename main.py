@@ -353,7 +353,7 @@ HTML_CONTENT = """
 </html>
 """
 
-# 1. Веб-сервер
+# Веб-сервер
 async def handle_index(request):
     return web.Response(text=HTML_CONTENT, content_type="text/html")
 
@@ -370,7 +370,6 @@ async def handle_webhook(request):
         logging.error(f"Ошибка вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
-# API сохранения отчета
 async def handle_api_report(request):
     try:
         data = await request.json()
@@ -451,104 +450,128 @@ async def handle_api_report(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
-# 2. Команды админа
-@dp.message(Command("add"))
-async def cmd_add_courier(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
+# ==========================================
+# ОБРАБОТЧИКИ CALLBACK (Сводный отчет СТРОГО НАВЕРХУ)
+# ==========================================
+
+@dp.callback_query(F.data == "admin_stat_today_all")
+async def admin_stat_today_all_handler(callback: types.CallbackQuery):
+    logging.info(">>> СРАБОТАЛ ОБРАБОТЧИК СВОДНОГО ОТЧЕТА ЗА СЕГОДНЯ! <<<")
+    try:
+        await callback.answer("⏳ Формирование сводного отчета...")
+    except Exception:
+        pass
+
+    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
+        try:
+            await callback.message.answer("❌ Нет доступа")
+        except Exception:
+            pass
         return
 
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        await message.answer("⚠️ Использование: `/add ТЕЛЕГРАМ_ID`\nПример: `/add 123456789`", parse_mode="Markdown")
-        return
+    try:
+        today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
+        reports = load_reports()
+        
+        if not reports:
+            msg = "📭 База данных reports.json пуста."
+            await callback.message.answer(msg)
+            return
 
-    new_id = int(args[1])
-    couriers = load_couriers()
+        courier_stats = {}
+        matched_reports_count = 0
 
-    if new_id in couriers:
-        await message.answer(f"ℹ️ Курьер с ID `{new_id}` уже есть в списке.", parse_mode="Markdown")
-    else:
-        couriers.append(new_id)
-        save_couriers(couriers)
-        await message.answer(f"✅ Курьер с ID `{new_id}` успешно добавлен в систему!", parse_mode="Markdown")
+        for r in reports:
+            if not isinstance(r, dict):
+                continue
+            r_date_str = str(r.get("date", ""))
+            
+            if r_date_str.startswith(today_date):
+                matched_reports_count += 1
+                cid = str(r.get("courier_id", "неизвестно"))
+                cname = str(r.get("courier_name", "Курьер"))
+                cuser = str(r.get("courier_username", "нет_юзернейма"))
 
+                if cid not in courier_stats:
+                    courier_stats[cid] = {
+                        "name": cname,
+                        "username": cuser,
+                        "phys_delivered": 0,
+                        "jur_delivered": 0,
+                        "returned": 0,
+                        "revenue": 0,
+                        "earnings": 0,
+                        "orders": 0
+                    }
 
-@dp.message(Command("remove"))
-async def cmd_remove_courier(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
-        return
+                deliv = int(r.get("delivered", 0) or 0)
+                ret = int(r.get("returned", 0) or 0)
+                rev = int(r.get("total_price", 0) or 0)
+                earn = int(r.get("earnings", 0) or 0)
+                ctype = str(r.get("client_type", "Физ. лицо"))
 
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        await message.answer("⚠️ Использование: `/remove ТЕЛЕГРАМ_ID`\nПример: `/remove 123456789`", parse_mode="Markdown")
-        return
+                if "Юр" in ctype:
+                    courier_stats[cid]["jur_delivered"] += deliv
+                else:
+                    courier_stats[cid]["phys_delivered"] += deliv
 
-    target_id = int(args[1])
-    couriers = load_couriers()
+                courier_stats[cid]["returned"] += ret
+                courier_stats[cid]["revenue"] += rev
+                courier_stats[cid]["earnings"] += earn
+                courier_stats[cid]["orders"] += 1
 
-    if target_id in couriers:
-        couriers.remove(target_id)
-        save_couriers(couriers)
-        await message.answer(f"🗑 Курьер с ID `{target_id}` удален из системы.", parse_mode="Markdown")
-    else:
-        await message.answer(f"⚠️ Курьер с ID `{target_id}` не найден в списке.", parse_mode="Markdown")
+        if matched_reports_count == 0:
+            last_date = reports[-1].get("date", "нет данных") if reports else "нет данных"
+            msg = (
+                f"📭 За сегодня (`{today_date}`) отчетов не найдено.\n"
+                f"📅 Последний отчет в базе был от: `{last_date}`"
+            )
+            await callback.message.answer(msg, parse_mode="Markdown")
+            return
 
+        text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
+        
+        grand_delivered = 0
+        grand_returned = 0
+        grand_revenue = 0
+        grand_earnings = 0
 
-@dp.message(Command("list"))
-async def cmd_list_couriers(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
-        return
+        for cid, s in courier_stats.items():
+            total_courier_deliv = s["phys_delivered"] + s["jur_delivered"]
+            grand_delivered += total_courier_deliv
+            grand_returned += s["returned"]
+            grand_revenue += s["revenue"]
+            grand_earnings += s["earnings"]
 
-    couriers = load_couriers()
-    if not couriers:
-        await message.answer("📭 Список курьеров пуст.")
-    else:
-        text = "📋 **Список разрешенных курьеров (ID):**\n\n" + "\n".join([f"• `{cid}`" for cid in couriers])
-        await message.answer(text, parse_mode="Markdown")
+            rev_fmt = f"{s['revenue']:,}".replace(",", " ")
+            earn_fmt = f"{s['earnings']:,}".replace(",", " ")
 
+            text += (
+                f"🚚 {s['name']} (@{s['username']})\n"
+                f"📦 Заказов: {s['orders']} | Сдано: {total_courier_deliv} шт. (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
+                f"🔄 Пустых: {s['returned']} шт. | Выручка: {rev_fmt} сум | ЗП: {earn_fmt} сум\n"
+                f"───────────────────\n"
+            )
 
-# 3. Интерактивная Панель Админа
-@dp.message(Command("stats"))
-@dp.message(F.text == "📊 Статистика админа")
-async def admin_panel_select_courier(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
-        return
+        tot_rev_fmt = f"{grand_revenue:,}".replace(",", " ")
+        tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
 
-    reports = load_reports()
-    courier_map = {}
+        text += (
+            f"📊 ИТОГО ПО КОМПАНИИ:\n"
+            f"💧 Сдано всего полных: {grand_delivered} шт.\n"
+            f"🔄 Собрано всего пустых: {grand_returned} шт.\n"
+            f"💰 Общая выручка: {tot_rev_fmt} сум\n"
+            f"💵 Всего курьерских: {tot_earn_fmt} сум"
+        )
 
-    for r in reports:
-        cid = r.get("courier_id")
-        if cid:
-            try:
-                cid = int(cid)
-            except ValueError:
-                pass
-            cname = r.get("courier_name", "Курьер")
-            cuser = r.get("courier_username", "нет_юзернейма")
-            courier_map[cid] = f"{cname} (@{cuser})"
+        await callback.message.answer(text)
 
-    inline_keyboard = []
-    
-    inline_keyboard.append([
-        InlineKeyboardButton(text="🏢 Общий сводный отчет (За сегодня)", callback_data="admin_stat_today_all")
-    ])
-
-    for cid, label in courier_map.items():
-        inline_keyboard.append([
-            InlineKeyboardButton(text=f"🚚 {label}", callback_data=f"sel_cour_{cid}")
-        ])
-
-    if not courier_map:
-        await message.answer("📭 В системе пока нет ни одного опубликованного отчета.")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-    await message.answer("👥 Панель администратора:\nВыберите курьера для просмотра статистики:", reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Ошибка в общем сводном отчете: {e}", exc_info=True)
+        try:
+            await callback.message.answer(f"⚠️ Ошибка формирования отчета: {e}")
+        except Exception:
+            pass
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("sel_cour_"))
@@ -699,127 +722,105 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
         await callback.message.answer(text)
 
 
-# НАДЕЖНЫЙ ОБРАБОТЧИК КНОПКИ СВОДНОГО ОТЧЕТА (ОТПРАВКА НОВЫМ СООБЩЕНИЕМ)
-@dp.callback_query(lambda c: c.data == "admin_stat_today_all")
-async def admin_stat_today_all_handler(callback: types.CallbackQuery):
-    try:
-        await callback.answer("⏳ Формирование сводного отчета...")
-    except Exception:
-        pass
-
-    if ADMIN_IDS and callback.from_user.id not in ADMIN_IDS:
-        try:
-            await callback.message.answer("❌ Нет доступа")
-        except Exception:
-            pass
+# Команды админа и обычные сообщения
+@dp.message(Command("add"))
+async def cmd_add_courier(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
         return
 
-    try:
-        today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
-        reports = load_reports()
-        
-        if not reports:
-            msg = "📭 База данных reports.json пуста."
-            await callback.message.answer(msg)
-            return
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        await message.answer("⚠️ Использование: `/add ТЕЛЕГРАМ_ID`\nПример: `/add 123456789`", parse_mode="Markdown")
+        return
 
-        courier_stats = {}
-        matched_reports_count = 0
+    new_id = int(args[1])
+    couriers = load_couriers()
 
-        for r in reports:
-            if not isinstance(r, dict):
-                continue
-            r_date_str = str(r.get("date", ""))
-            
-            if r_date_str.startswith(today_date):
-                matched_reports_count += 1
-                cid = str(r.get("courier_id", "неизвестно"))
-                cname = str(r.get("courier_name", "Курьер"))
-                cuser = str(r.get("courier_username", "нет_юзернейма"))
-
-                if cid not in courier_stats:
-                    courier_stats[cid] = {
-                        "name": cname,
-                        "username": cuser,
-                        "phys_delivered": 0,
-                        "jur_delivered": 0,
-                        "returned": 0,
-                        "revenue": 0,
-                        "earnings": 0,
-                        "orders": 0
-                    }
-
-                deliv = int(r.get("delivered", 0) or 0)
-                ret = int(r.get("returned", 0) or 0)
-                rev = int(r.get("total_price", 0) or 0)
-                earn = int(r.get("earnings", 0) or 0)
-                ctype = str(r.get("client_type", "Физ. лицо"))
-
-                if "Юр" in ctype:
-                    courier_stats[cid]["jur_delivered"] += deliv
-                else:
-                    courier_stats[cid]["phys_delivered"] += deliv
-
-                courier_stats[cid]["returned"] += ret
-                courier_stats[cid]["revenue"] += rev
-                courier_stats[cid]["earnings"] += earn
-                courier_stats[cid]["orders"] += 1
-
-        if matched_reports_count == 0:
-            last_date = reports[-1].get("date", "нет данных") if reports else "нет данных"
-            msg = (
-                f"📭 За сегодня (`{today_date}`) отчетов не найдено.\n"
-                f"📅 Последний отчет в базе был от: `{last_date}`"
-            )
-            await callback.message.answer(msg, parse_mode="Markdown")
-            return
-
-        text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
-        
-        grand_delivered = 0
-        grand_returned = 0
-        grand_revenue = 0
-        grand_earnings = 0
-
-        for cid, s in courier_stats.items():
-            total_courier_deliv = s["phys_delivered"] + s["jur_delivered"]
-            grand_delivered += total_courier_deliv
-            grand_returned += s["returned"]
-            grand_revenue += s["revenue"]
-            grand_earnings += s["earnings"]
-
-            rev_fmt = f"{s['revenue']:,}".replace(",", " ")
-            earn_fmt = f"{s['earnings']:,}".replace(",", " ")
-
-            text += (
-                f"🚚 {s['name']} (@{s['username']})\n"
-                f"📦 Заказов: {s['orders']} | Сдано: {total_courier_deliv} шт. (👤 {s['phys_delivered']} / 🏢 {s['jur_delivered']})\n"
-                f"🔄 Пустых: {s['returned']} шт. | Выручка: {rev_fmt} сум | ЗП: {earn_fmt} сум\n"
-                f"───────────────────\n"
-            )
-
-        tot_rev_fmt = f"{grand_revenue:,}".replace(",", " ")
-        tot_earn_fmt = f"{grand_earnings:,}".replace(",", " ")
-
-        text += (
-            f"📊 ИТОГО ПО КОМПАНИИ:\n"
-            f"💧 Сдано всего полных: {grand_delivered} шт.\n"
-            f"🔄 Собрано всего пустых: {grand_returned} шт.\n"
-            f"💰 Общая выручка: {tot_rev_fmt} сум\n"
-            f"💵 Всего курьерских: {tot_earn_fmt} сум"
-        )
-
-        await callback.message.answer(text)
-
-    except Exception as e:
-        logging.error(f"Ошибка в общем сводном отчете: {e}", exc_info=True)
-        try:
-            await callback.message.answer(f"⚠️ Ошибка формирования отчета: {e}")
-        except Exception:
-            pass
+    if new_id in couriers:
+        await message.answer(f"ℹ️ Курьер с ID `{new_id}` уже есть в списке.", parse_mode="Markdown")
+    else:
+        couriers.append(new_id)
+        save_couriers(couriers)
+        await message.answer(f"✅ Курьер с ID `{new_id}` успешно добавлен в систему!", parse_mode="Markdown")
 
 
-# 4. Основная логика бота
+@dp.message(Command("remove"))
+async def cmd_remove_courier(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        await message.answer("⚠️ Использование: `/remove ТЕЛЕГРАМ_ID`\nПример: `/remove 123456789`", parse_mode="Markdown")
+        return
+
+    target_id = int(args[1])
+    couriers = load_couriers()
+
+    if target_id in couriers:
+        couriers.remove(target_id)
+        save_couriers(couriers)
+        await message.answer(f"🗑 Курьер с ID `{target_id}` удален из системы.", parse_mode="Markdown")
+    else:
+        await message.answer(f"⚠️ Курьер с ID `{target_id}` не найден в списке.", parse_mode="Markdown")
+
+
+@dp.message(Command("list"))
+async def cmd_list_couriers(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+
+    couriers = load_couriers()
+    if not couriers:
+        await message.answer("📭 Список курьеров пуст.")
+    else:
+        text = "📋 **Список разрешенных курьеров (ID):**\n\n" + "\n".join([f"• `{cid}`" for cid in couriers])
+        await message.answer(text, parse_mode="Markdown")
+
+
+@dp.message(Command("stats"))
+@dp.message(F.text == "📊 Статистика админа")
+async def admin_panel_select_courier(message: types.Message):
+    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+
+    reports = load_reports()
+    courier_map = {}
+
+    for r in reports:
+        cid = r.get("courier_id")
+        if cid:
+            try:
+                cid = int(cid)
+            except ValueError:
+                pass
+            cname = r.get("courier_name", "Курьер")
+            cuser = r.get("courier_username", "нет_юзернейма")
+            courier_map[cid] = f"{cname} (@{cuser})"
+
+    inline_keyboard = []
+    
+    inline_keyboard.append([
+        InlineKeyboardButton(text="🏢 Общий сводный отчет (За сегодня)", callback_data="admin_stat_today_all")
+    ])
+
+    for cid, label in courier_map.items():
+        inline_keyboard.append([
+            InlineKeyboardButton(text=f"🚚 {label}", callback_data=f"sel_cour_{cid}")
+        ])
+
+    if not courier_map:
+        await message.answer("📭 В системе пока нет ни одного опубликованного отчета.")
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    await message.answer("👥 Панель администратора:\nВыберите курьера для просмотра статистики:", reply_markup=kb)
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -904,7 +905,7 @@ async def check_today_earnings(message: types.Message):
     )
 
 
-# 5. Запуск
+# Запуск сервера
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_index)

@@ -671,7 +671,7 @@ async def admin_show_courier_report(callback: types.CallbackQuery):
     await callback.message.edit_text(text)
 
 
-# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (ЗАЩИЩЕННЫЙ ОБРАБОТЧИК)
+# ОБЩИЙ СВОДНЫЙ ОТЧЕТ (ИСПРАВЛЕННЫЙ ОБРАБОТЧИК)
 @dp.callback_query(F.data == "admin_stat_today_all")
 async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     await callback.answer("Загрузка сводки...")
@@ -682,13 +682,22 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
     try:
         today_date = datetime.now().strftime("%Y-%m-%d")
         reports = load_reports()
+        
+        if not reports:
+            await callback.message.edit_text("📭 База данных reports.json пуста.")
+            return
+
         courier_stats = {}
+        matched_reports_count = 0
 
         for r in reports:
             if not isinstance(r, dict):
                 continue
-            r_date = str(r.get("date", ""))
-            if today_date in r_date:
+            r_date_str = str(r.get("date", ""))
+            
+            # Проверяем, начинается ли дата отчета с сегодняшнего дня
+            if r_date_str.startswith(today_date):
+                matched_reports_count += 1
                 cid = str(r.get("courier_id", "неизвестно"))
                 cname = str(r.get("courier_name", "Курьер"))
                 cuser = str(r.get("courier_username", "нет_юзернейма"))
@@ -721,8 +730,13 @@ async def admin_stat_today_all_handler(callback: types.CallbackQuery):
                 courier_stats[cid]["earnings"] += earn
                 courier_stats[cid]["orders"] += 1
 
-        if not courier_stats:
-            await callback.message.edit_text(f"📭 За сегодня ({today_date}) отчетов еще не поступало.")
+        if matched_reports_count == 0:
+            last_date = reports[-1].get("date", "нет данных") if reports else "нет данных"
+            await callback.message.edit_text(
+                f"📭 За сегодня (`{today_date}`) отчетов не найдено.\n"
+                f"📅 Последний отчет в базе был от: `{last_date}`\n"
+                f"(Возможна разница часовых поясов на сервере Render)."
+            )
             return
 
         text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
@@ -882,13 +896,15 @@ async def main():
                         pass
                 except Exception:
                     pass
-                await asyncio.sleep(600)
+                await asyncio.sleep(300)
 
     asyncio.create_task(ping_loop())
+    
+    # Запуск поллинга через вебхуки (aiohttp держит сервер)
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    finally:
-        pass
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Бот остановлен.")

@@ -907,29 +907,29 @@ async def handle_api_report(request):
         if is_reschedule:
             reschedule_date = str(data.get("reschedule_date", "Завтра"))
             
-            # А) Сохраняем в специальную таблицу переносов Supabase
+            # А) Сохраняем в таблицу переносов Supabase
             save_rescheduled_order(sender_id, raw_name, client_id, reschedule_date)
 
             # Б) Удаляем точку из сегодняшнего маршрута курьера
             remove_point_from_route(sender_id, client_id)
 
             report_text = (
-                f"📅 **ПЕРЕНОС ЗАКАЗА**\n\n"
+                f"📅 ПЕРЕНОС ЗАКАЗА\n\n"
                 f"🚚 Курьер: {raw_name} (@{raw_username})\n"
-                f"🆔 Клиент / Точка: **{client_id}**\n"
-                f"🗓 Когда привезти: **{reschedule_date}**\n"
+                f"🆔 Клиент / Точка: {client_id}\n"
+                f"🗓 Когда привезти: {reschedule_date}\n"
                 f"❌ Точка удалена из текущего маршрута."
             )
 
             if sender_id:
                 try:
-                    await bot.send_message(chat_id=sender_id, text=f"✅ Заказ перенесен!\n\n{report_text}", parse_mode="Markdown")
+                    await bot.send_message(chat_id=sender_id, text=f"✅ Заказ перенесен!\n\n{report_text}")
                 except Exception as e: logging.error(f"Ошибка отправки курьеру: {e}")
 
             if CHANNEL_ID:
                 try:
                     target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
-                    await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
+                    await bot.send_message(chat_id=target_chat, text=report_text)
                 except Exception as channel_err: logging.error(f"Ошибка отправки в канал: {channel_err}")
 
             return web.json_response({"status": "ok"})
@@ -960,7 +960,6 @@ async def handle_api_report(request):
         }
         save_report_to_db(report_record)
 
-        # Удаляем выполненную точку из списка маршрута на сегодня
         remove_point_from_route(sender_id, client_id)
 
         formatted_price = f"{total_price:,}".replace(",", " ")

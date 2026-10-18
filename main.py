@@ -51,24 +51,9 @@ BONUS_PHYSICAL = 3500
 BONUS_JURIDICAL = 2000
 UZ_TIMEZONE = timezone(timedelta(hours=5))
 
-# Состояния FSM
-class CourierStatStates(StatesGroup):
-    waiting_for_period = State()
-    waiting_for_action = State()
-
-class CourierMyStatsStates(StatesGroup):
-    waiting_for_period = State()
-
-class AdminManageStates(StatesGroup):
-    waiting_for_add_data = State()
-    waiting_for_rename_data = State()
-    waiting_for_remove_id = State()
-
 # --- Функции работы с Supabase ---
 def load_couriers():
-    """Загружает список курьеров из базы (возвращает словарь {user_id: name})"""
-    if not supabase:
-        return {}
+    if not supabase: return {}
     try:
         response = supabase.table("couriers").select("user_id, name").execute()
         couriers_dict = {}
@@ -83,8 +68,7 @@ def load_couriers():
         return {}
 
 def load_reports():
-    if not supabase:
-        return []
+    if not supabase: return []
     try:
         response = supabase.table("reports").select("*").execute()
         return response.data or []
@@ -93,16 +77,24 @@ def load_reports():
         return []
 
 def save_report_to_db(report_data):
-    if not supabase:
-        logging.error("Supabase не подключен, отчет не сохранен в БД!")
-        return
+    if not supabase: return
     try:
         supabase.table("reports").insert(report_data).execute()
         logging.info("Отчет успешно сохранен в Supabase!")
     except Exception as e:
         logging.error(f"Ошибка записи отчета в Supabase: {e}")
 
-# ПРЕМИУМ HTML MINI APP (С динамическим маршрутом и ручным вводом)
+def remove_point_from_route(courier_id, client_name):
+    """Удаляет выполненную или перенесенную точку из сегодняшнего маршрута"""
+    if not supabase or not courier_id: return
+    try:
+        today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
+        supabase.table("daily_routes").delete().eq("date", today_date).eq("courier_id", int(courier_id)).eq("client_name", client_name).execute()
+        logging.info(f"Точка '{client_name}' удалена из сегодняшнего маршрута курьера {courier_id}")
+    except Exception as e:
+        logging.error(f"Ошибка удаления точки из маршрута: {e}")
+
+# ПРЕМИУМ HTML MINI APP С ПОДДЕРЖКОЙ ПЕРЕНОСА ЗАКАЗА
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -121,7 +113,7 @@ HTML_CONTENT = """
             --primary-color: var(--tg-theme-button-color, #0284c7);
             --primary-text: var(--tg-theme-button-text-color, #ffffff);
             --border-color: #e2e8f0;
-            --accent-bg: #f0f9ff;
+            --danger-color: #ef4444;
         }
 
         * {
@@ -153,7 +145,7 @@ HTML_CONTENT = """
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
+            margin-bottom: 16px;
         }
 
         .brand {
@@ -192,12 +184,12 @@ HTML_CONTENT = """
         }
 
         .form-group {
-            margin-bottom: 16px;
+            margin-bottom: 14px;
         }
 
         label {
             display: block;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
             margin-bottom: 6px;
             color: var(--hint-color);
@@ -217,10 +209,39 @@ HTML_CONTENT = """
             outline: none;
         }
 
+        /* Блок выбора переноса */
+        .reschedule-box {
+            background: #fff1f2;
+            border: 1.5px dashed #f43f5e;
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .reschedule-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 14px;
+            color: #be123c;
+        }
+
+        .reschedule-toggle input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            accent-color: #f43f5e;
+            cursor: pointer;
+        }
+
         .quick-chips {
             display: flex;
             gap: 6px;
-            margin-top: 8px;
+            margin-top: 6px;
         }
 
         .chip {
@@ -246,7 +267,7 @@ HTML_CONTENT = """
             background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
             border-radius: 14px;
             padding: 14px 16px;
-            margin: 18px 0 14px 0;
+            margin: 16px 0 14px 0;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -278,6 +299,11 @@ HTML_CONTENT = """
             box-shadow: 0 6px 20px rgba(2, 132, 199, 0.3);
         }
 
+        .btn-submit.reschedule-btn {
+            background: linear-gradient(135deg, #e11d48, #be123c);
+            box-shadow: 0 6px 20px rgba(225, 29, 72, 0.3);
+        }
+
         .btn-submit:disabled {
             background: #cbd5e1;
             box-shadow: none;
@@ -299,7 +325,7 @@ HTML_CONTENT = """
         </div>
 
         <form id="reportForm">
-            <!-- Динамический выбор клиента из утреннего маршрута -->
+            <!-- Динамический выбор клиента -->
             <div class="form-group">
                 <label id="t_clientId">Клиент / Точка маршрута</label>
                 <select id="clientIdSelect" required onchange="checkCustomClient(this)">
@@ -307,58 +333,78 @@ HTML_CONTENT = """
                 </select>
             </div>
 
-            <!-- Поле для ручного ввода при форс-мажоре -->
+            <!-- Ручной ввод -->
             <div class="form-group" id="customClientGroup" style="display: none;">
                 <label id="t_customClient">Введите название клиента / ID</label>
                 <input type="text" id="customClientInput" placeholder="Например: ООО Навруз или 1045">
             </div>
 
-            <div class="form-group">
-                <label id="t_delivered">Сдал полных (19л)</label>
-                <input type="number" id="delivered" placeholder="0" min="0" required>
-                <div class="quick-chips">
-                    <div class="chip" onclick="setQty('delivered', 2)">2</div>
-                    <div class="chip" onclick="setQty('delivered', 3)">3</div>
-                    <div class="chip" onclick="setQty('delivered', 4)">4</div>
-                    <div class="chip" onclick="setQty('delivered', 5)">5</div>
-                    <div class="chip" onclick="setQty('delivered', 0)">Сброс</div>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label id="t_returned">Принял пустых (19л)</label>
-                <input type="number" id="returned" placeholder="0" min="0" required>
-                <div class="quick-chips">
-                    <div class="chip" onclick="setQty('returned', 1)">1</div>
-                    <div class="chip" onclick="setQty('returned', 2)">2</div>
-                    <div class="chip" onclick="setQty('returned', 3)">3</div>
-                    <div class="chip" onclick="setQty('returned', 4)">4</div>
-                    <div class="chip" onclick="setQty('returned', 5)">5</div>
-                    <div class="chip" onclick="setQty('returned', 0)">Сброс</div>
-                </div>
-            </div>
-
-            <div class="row-grid">
-                <div class="form-group">
-                    <label id="t_clientType">Тип клиента</label>
-                    <select id="clientType">
-                        <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
-                        <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label id="t_paymentType">Тип оплаты</label>
-                    <select id="paymentType">
-                        <option value="Наличные" id="opt_cash">Наличные</option>
-                        <option value="Click/Payme">Click/Payme</option>
-                        <option value="Перечисление" id="opt_bank">Перечисление</option>
+            <!-- ЧЕКБОКС ПЕРЕНОСА ЗАКАЗА -->
+            <div class="reschedule-box">
+                <label class="reschedule-toggle">
+                    <input type="checkbox" id="isReschedule" onchange="toggleRescheduleMode(this.checked)">
+                    <span id="t_rescheduleLabel">📅 Перенести заказ на другой день</span>
+                </label>
+                <div id="rescheduleDateField" style="display: none; margin-top: 6px;">
+                    <label style="color: #9f1239; font-size: 11px;" id="t_rescheduleDateLabel">Укажите когда привезти:</label>
+                    <select id="rescheduleTargetDate">
+                        <option value="Завтра">Завтра</option>
+                        <option value="Послезавтра">Послезавтра</option>
+                        <option value="Через 3 дня">Через 3 дня</option>
+                        <option value="Уточнить по звонку">Уточнить по звонку</option>
                     </select>
                 </div>
             </div>
 
-            <div class="summary-box">
-                <div class="summary-label" id="t_totalLabel">К оплате:</div>
-                <div class="summary-value" id="summaryDisplay">0 сум</div>
+            <!-- БЛОК ВВОДА БУТЫЛЕЙ (Скрывается при переносе) -->
+            <div id="deliveryFieldsBlock">
+                <div class="form-group">
+                    <label id="t_delivered">Сдал полных (19л)</label>
+                    <input type="number" id="delivered" placeholder="0" min="0">
+                    <div class="quick-chips">
+                        <div class="chip" onclick="setQty('delivered', 2)">2</div>
+                        <div class="chip" onclick="setQty('delivered', 3)">3</div>
+                        <div class="chip" onclick="setQty('delivered', 4)">4</div>
+                        <div class="chip" onclick="setQty('delivered', 5)">5</div>
+                        <div class="chip" onclick="setQty('delivered', 0)">Сброс</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label id="t_returned">Принял пустых (19л)</label>
+                    <input type="number" id="returned" placeholder="0" min="0">
+                    <div class="quick-chips">
+                        <div class="chip" onclick="setQty('returned', 1)">1</div>
+                        <div class="chip" onclick="setQty('returned', 2)">2</div>
+                        <div class="chip" onclick="setQty('returned', 3)">3</div>
+                        <div class="chip" onclick="setQty('returned', 4)">4</div>
+                        <div class="chip" onclick="setQty('returned', 5)">5</div>
+                        <div class="chip" onclick="setQty('returned', 0)">Сброс</div>
+                    </div>
+                </div>
+
+                <div class="row-grid">
+                    <div class="form-group">
+                        <label id="t_clientType">Тип клиента</label>
+                        <select id="clientType">
+                            <option value="Физ. лицо" id="opt_phys">Физ. лицо</option>
+                            <option value="Юр. лицо" id="opt_jur">Юр. лицо</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label id="t_paymentType">Тип оплаты</label>
+                        <select id="paymentType">
+                            <option value="Наличные" id="opt_cash">Наличные</option>
+                            <option value="Click/Payme">Click/Payme</option>
+                            <option value="Перечисление" id="opt_bank">Перечисление</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="summary-box">
+                    <div class="summary-label" id="t_totalLabel">К оплате:</div>
+                    <div class="summary-value" id="summaryDisplay">0 сум</div>
+                </div>
             </div>
 
             <button type="submit" id="submitBtn" class="btn-submit" disabled>Отправить отчет</button>
@@ -376,6 +422,8 @@ HTML_CONTENT = """
                 title: "Отчет курьера",
                 clientId: "Клиент / Точка маршрута",
                 customClient: "Введите название клиента / ID",
+                rescheduleLabel: "📅 Перенести заказ на другой день",
+                rescheduleDateLabel: "Укажите когда привезти:",
                 delivered: "Сдал полных (19л)",
                 returned: "Принял пустых (19л)",
                 clientType: "Тип клиента",
@@ -386,12 +434,15 @@ HTML_CONTENT = """
                 bank: "Перечисление",
                 totalLabel: "К оплате:",
                 submit: "Отправить отчет",
+                submitReschedule: "⚠️ Перенести и убрать из списка",
                 sending: "Отправка..."
             },
             uz: {
                 title: "Kuryer hisoboti",
                 clientId: "Mijoz / Marshrut nuqtasi",
                 customClient: "Mijoz nomini kiriting / ID",
+                rescheduleLabel: "📅 Boshqa kunga ko'chirish",
+                rescheduleDateLabel: "Qachon olib borilsin:",
                 delivered: "Topshirildi (19l)",
                 returned: "Qabul qilindi (19l)",
                 clientType: "Mijoz turi",
@@ -402,6 +453,7 @@ HTML_CONTENT = """
                 bank: "Pul o'tkazmasi",
                 totalLabel: "Jami summa:",
                 submit: "Hisobotni yuborish",
+                submitReschedule: "⚠️ Ko'chirish va ro'yxatdan o'chirish",
                 sending: "Yuborilmoqda..."
             }
         };
@@ -410,6 +462,9 @@ HTML_CONTENT = """
         const clientIdSelect = document.getElementById('clientIdSelect');
         const customClientGroup = document.getElementById('customClientGroup');
         const customClientInput = document.getElementById('customClientInput');
+        const isRescheduleCheckbox = document.getElementById('isReschedule');
+        const rescheduleDateField = document.getElementById('rescheduleDateField');
+        const deliveryFieldsBlock = document.getElementById('deliveryFieldsBlock');
         const deliveredInput = document.getElementById('delivered');
         const returnedInput = document.getElementById('returned');
         const clientTypeSelect = document.getElementById('clientType');
@@ -428,6 +483,8 @@ HTML_CONTENT = """
             document.getElementById('t_title').innerText = t.title;
             document.getElementById('t_clientId').innerText = t.clientId;
             document.getElementById('t_customClient').innerText = t.customClient;
+            document.getElementById('t_rescheduleLabel').innerText = t.rescheduleLabel;
+            document.getElementById('t_rescheduleDateLabel').innerText = t.rescheduleDateLabel;
             document.getElementById('t_delivered').innerText = t.delivered;
             document.getElementById('t_returned').innerText = t.returned;
             document.getElementById('t_clientType').innerText = t.clientType;
@@ -437,7 +494,29 @@ HTML_CONTENT = """
             document.getElementById('opt_cash').innerText = t.cash;
             document.getElementById('opt_bank').innerText = t.bank;
             document.getElementById('t_totalLabel').innerText = t.totalLabel;
-            if (!submitBtn.disabled && submitBtn.innerText !== translations[currentLang].sending) {
+            
+            updateSubmitButtonText();
+        }
+
+        function toggleRescheduleMode(isReschedule) {
+            if (isReschedule) {
+                deliveryFieldsBlock.style.display = 'none';
+                rescheduleDateField.style.display = 'block';
+                submitBtn.classList.add('reschedule-btn');
+            } else {
+                deliveryFieldsBlock.style.display = 'block';
+                rescheduleDateField.style.display = 'none';
+                submitBtn.classList.remove('reschedule-btn');
+            }
+            updateSubmitButtonText();
+            validateForm();
+        }
+
+        function updateSubmitButtonText() {
+            const t = translations[currentLang];
+            if (isRescheduleCheckbox.checked) {
+                submitBtn.innerText = t.submitReschedule;
+            } else {
                 submitBtn.innerText = t.submit;
             }
         }
@@ -524,10 +603,14 @@ HTML_CONTENT = """
                 hasClient = clientVal !== "";
             }
 
-            const isValid = hasClient && 
-                            deliveredInput.value.trim() !== "" && 
-                            returnedInput.value.trim() !== "";
-            submitBtn.disabled = !isValid;
+            if (isRescheduleCheckbox.checked) {
+                submitBtn.disabled = !hasClient;
+            } else {
+                const isValid = hasClient && 
+                                deliveredInput.value.trim() !== "" && 
+                                returnedInput.value.trim() !== "";
+                submitBtn.disabled = !isValid;
+            }
         }
 
         document.getElementById('reportForm').addEventListener('submit', async function(e) {
@@ -536,24 +619,25 @@ HTML_CONTENT = """
             submitBtn.innerText = translations[currentLang].sending;
 
             const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
-            const delivCount = parseInt(deliveredInput.value) || 0;
-            const calculatedTotal = delivCount * PRICE_PER_BOTTLE;
-
             let finalClient = clientIdSelect.value;
             if (finalClient === "CUSTOM_INPUT" || finalClient === "CUSTOM" || !finalClient) {
                 finalClient = customClientInput.value.trim();
             }
+
+            const isReschedule = isRescheduleCheckbox.checked;
 
             const data = {
                 user_id: tgUser ? tgUser.id : null,
                 user_name: tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : "Курьер",
                 username: tgUser ? (tgUser.username || "нет_юзернейма") : "нет_юзернейма",
                 client_id: finalClient,
-                delivered: delivCount,
-                returned: parseInt(returnedInput.value) || 0,
-                client_type: clientTypeSelect.value,
-                payment_type: document.getElementById('paymentType').value,
-                total_price: calculatedTotal
+                is_reschedule: isReschedule,
+                reschedule_date: isReschedule ? document.getElementById('rescheduleTargetDate').value : null,
+                delivered: isReschedule ? 0 : (parseInt(deliveredInput.value) || 0),
+                returned: isReschedule ? 0 : (parseInt(returnedInput.value) || 0),
+                client_type: isReschedule ? "-" : clientTypeSelect.value,
+                payment_type: isReschedule ? "-" : document.getElementById('paymentType').value,
+                total_price: isReschedule ? 0 : ((parseInt(deliveredInput.value) || 0) * PRICE_PER_BOTTLE)
             };
 
             try {
@@ -564,16 +648,16 @@ HTML_CONTENT = """
                 });
                 const resData = await response.json();
                 if (response.ok && resData.status === "ok") {
-                    tg ? tg.close() : alert("Успешно отправлено!");
+                    tg ? tg.close() : alert("Успешно!");
                 } else {
                     alert("Ошибка: " + (resData.message || "Попробуйте снова"));
                     submitBtn.disabled = false;
-                    submitBtn.innerText = translations[currentLang].submit;
+                    updateSubmitButtonText();
                 }
             } catch (err) {
                 alert("Ошибка соединения с сервером.");
                 submitBtn.disabled = false;
-                submitBtn.innerText = translations[currentLang].submit;
+                updateSubmitButtonText();
             }
         });
 
@@ -583,7 +667,7 @@ HTML_CONTENT = """
 </html>
 """
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БОТА (ОБЪЯВЛЕНЫ ДО ХЕНДЛЕРОВ) ---
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БОТА ---
 
 async def send_courier_personal_stats(target_message: types.Message, target_id: int, days: int = 1):
     try:
@@ -592,19 +676,14 @@ async def send_courier_personal_stats(target_message: types.Message, target_id: 
         cutoff = now - timedelta(days=days)
         reports = load_reports()
 
-        phys_deliv = 0
-        jur_deliv = 0
-        total_returned = 0
-        total_earnings = 0
-        orders_count = 0
+        phys_deliv, jur_deliv, total_returned, total_earnings, orders_count = 0, 0, 0, 0, 0
 
         for r in reports:
             if str(r.get("courier_id", "")) == str(target_id):
                 r_date_str = str(r.get("date", ""))
                 try:
                     r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UZ_TIMEZONE)
-                except Exception:
-                    continue
+                except Exception: continue
 
                 if days == 1:
                     if not r_date_str.startswith(today_date_str): continue
@@ -616,10 +695,8 @@ async def send_courier_personal_stats(target_message: types.Message, target_id: 
                 ctype = str(r.get("client_type", "Физ. лицо"))
                 earn = int(r.get("earnings", 0) or 0)
 
-                if "Юр" in ctype:
-                    jur_deliv += deliv
-                else:
-                    phys_deliv += deliv
+                if "Юр" in ctype: jur_deliv += deliv
+                else: phys_deliv += deliv
 
                 total_returned += ret
                 total_earnings += earn
@@ -680,10 +757,8 @@ async def send_summary_report(target_message: types.Message):
                 earn = int(r.get("earnings", 0) or 0)
                 ctype = str(r.get("client_type", "Физ. лицо"))
 
-                if "Юр" in ctype:
-                    courier_stats[cid]["jur_delivered"] += deliv
-                else:
-                    courier_stats[cid]["phys_delivered"] += deliv
+                if "Юр" in ctype: courier_stats[cid]["jur_delivered"] += deliv
+                else: courier_stats[cid]["phys_delivered"] += deliv
 
                 courier_stats[cid]["returned"] += ret
                 courier_stats[cid]["revenue"] += rev
@@ -813,14 +888,44 @@ async def handle_api_report(request):
                 return web.json_response({"status": "error", "message": "У вас нет доступа"}, status=403)
 
         client_id = str(data.get("client_id", "Не указан"))
+        is_reschedule = bool(data.get("is_reschedule", False))
+        raw_name = couriers.get(sender_id, str(data.get("user_name", "Курьер")))
+        raw_username = str(data.get("username", "нет_юзернейма"))
+
+        # 1. Если это ПЕРЕНОС ЗАКАЗА
+        if is_reschedule:
+            reschedule_date = str(data.get("reschedule_date", "Завтра"))
+            
+            # Автоматически удаляем эту точку из маршрута на сегодня
+            remove_point_from_route(sender_id, client_id)
+
+            report_text = (
+                f"📅 **ПЕРЕНОС ЗАКАЗА**\n\n"
+                f"🚚 Курьер: {raw_name} (@{raw_username})\n"
+                f"🆔 Клиент / Точка: **{client_id}**\n"
+                f"🗓 Когда привезти: **{reschedule_date}**\n"
+                f"❌ Точка удалена из текущего маршрута."
+            )
+
+            if sender_id:
+                try:
+                    await bot.send_message(chat_id=sender_id, text=f"✅ Заказ перенесен!\n\n{report_text}", parse_mode="Markdown")
+                except Exception as e: logging.error(f"Ошибка отправки курьеру: {e}")
+
+            if CHANNEL_ID:
+                try:
+                    target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
+                    await bot.send_message(chat_id=target_chat, text=report_text, parse_mode="Markdown")
+                except Exception as channel_err: logging.error(f"Ошибка отправки в канал: {channel_err}")
+
+            return web.json_response({"status": "ok"})
+
+        # 2. Если это ОБЫЧНЫЙ ОТЧЕТ О ДОСТАВКЕ
         delivered = int(data.get("delivered", 0))
         returned = int(data.get("returned", 0))
         client_type = str(data.get("client_type", "Физ. лицо"))
         payment_type = str(data.get("payment_type", "Наличные"))
         total_price = int(data.get("total_price", 0))
-        
-        raw_name = couriers.get(sender_id, str(data.get("user_name", "Курьер")))
-        raw_username = str(data.get("username", "нет_юзернейма"))
         
         rate = BONUS_JURIDICAL if "Юр" in client_type else BONUS_PHYSICAL
         courier_earnings = delivered * rate
@@ -841,6 +946,9 @@ async def handle_api_report(request):
         }
         save_report_to_db(report_record)
 
+        # Автоматически удаляем выполненную точку из списка маршрута на сегодня
+        remove_point_from_route(sender_id, client_id)
+
         formatted_price = f"{total_price:,}".replace(",", " ")
         formatted_earnings = f"{courier_earnings:,}".replace(",", " ")
         
@@ -859,15 +967,13 @@ async def handle_api_report(request):
         if sender_id:
             try:
                 await bot.send_message(chat_id=sender_id, text=f"✅ Отчет успешно отправлен!\n\n{report_text}")
-            except Exception as e:
-                logging.error(f"Не удалось отправить сообщение курьеру: {e}")
+            except Exception as e: logging.error(f"Ошибка отправки курьеру: {e}")
 
         if CHANNEL_ID:
             try:
                 target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
                 await bot.send_message(chat_id=target_chat, text=report_text)
-            except Exception as channel_err:
-                logging.error(f"Ошибка отправки в канал: {channel_err}")
+            except Exception as channel_err: logging.error(f"Ошибка отправки в канал: {channel_err}")
 
         return web.json_response({"status": "ok"})
     except Exception as e:

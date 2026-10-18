@@ -61,9 +61,18 @@
     <div class="container">
         <h2>Отчет о доставке</h2>
         
+        <!-- Динамический выбор клиента из утреннего маршрута -->
         <div class="form-group">
-            <label for="clientId">ID абонента:</label>
-            <input type="text" id="clientId" placeholder="Введите ID клиента">
+            <label for="clientId">Клиент / Точка маршрута:</label>
+            <select id="clientId" onchange="checkCustomClient(this)">
+                <option value="" disabled selected>Загрузка маршрута...</option>
+            </select>
+        </div>
+
+        <!-- Поле для ручного ввода (появляется при выборе "Другой клиент") -->
+        <div class="form-group" id="customClientGroup" style="display: none;">
+            <label for="customClientInput">Введите название нового клиента:</label>
+            <input type="text" id="customClientInput" placeholder="Например: ООО Навруз">
         </div>
 
         <div class="form-group">
@@ -105,17 +114,78 @@
         let tg = window.Telegram.WebApp;
         tg.expand();
 
+        // Автоматическая загрузка точек маршрута для текущего курьера при старте
+        async function loadCourierRoute() {
+            const tgUser = tg.initDataUnsafe?.user;
+            const selectElement = document.getElementById('clientId');
+
+            if (!tgUser || !tgUser.id) {
+                selectElement.innerHTML = '<option value="CUSTOM">⚠️ Откройте через Telegram</option>';
+                showCustomInput(true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/route?user_id=${tgUser.id}`);
+                const data = await response.json();
+                
+                if (data.status === "ok" && data.points && data.points.length > 0) {
+                    selectElement.innerHTML = '<option value="" disabled selected>-- Выберите точку из маршрута --</option>';
+                    
+                    data.points.forEach(point => {
+                        const option = document.createElement('option');
+                        option.value = point;
+                        option.textContent = point;
+                        selectElement.appendChild(option);
+                    });
+
+                    // Добавляем пункт форс-мажора
+                    const customOption = document.createElement('option');
+                    customOption.value = "CUSTOM_INPUT";
+                    customOption.textContent = "➕ Другой клиент (ввести вручную)";
+                    selectElement.appendChild(customOption);
+                } else {
+                    selectElement.innerHTML = '<option value="CUSTOM">Нет маршрута на сегодня (введите вручную)</option>';
+                    showCustomInput(true);
+                }
+            } catch (err) {
+                console.error("Ошибка загрузки маршрута:", err);
+                selectElement.innerHTML = '<option value="CUSTOM">Ошибка связи (введите вручную)</option>';
+                showCustomInput(true);
+            }
+        }
+
+        // Обработка выбора «Другой клиент»
+        function checkCustomClient(selectObj) {
+            if (selectObj.value === "CUSTOM_INPUT" || selectObj.value === "CUSTOM") {
+                showCustomInput(true);
+            } else {
+                showCustomInput(false);
+            }
+        }
+
+        function showCustomInput(show) {
+            const group = document.getElementById('customClientGroup');
+            group.style.display = show ? 'block' : 'none';
+        }
+
         // Автоподсчет суммы по 23 000 сум за 1 бутыль
         function calculateTotal() {
             const delivered = parseInt(document.getElementById('deliveredCount').value) || 0;
             const pricePerBottle = 23000;
-            const totalPrice = delivered * pricePerBottle;
-            document.getElementById('totalPrice').value = totalPrice;
+            document.getElementById('totalPrice').value = delivered * pricePerBottle;
         }
 
         function sendReport() {
+            let clientId = document.getElementById('clientId').value;
+            
+            // Если выбран ручной ввод, берем текст оттуда
+            if (clientId === "CUSTOM_INPUT" || clientId === "CUSTOM" || !clientId) {
+                clientId = document.getElementById('customClientInput').value.trim();
+            }
+
             const data = {
-                client_id: document.getElementById('clientId').value,
+                client_id: clientId,
                 delivered: document.getElementById('deliveredCount').value,
                 returned: document.getElementById('returnedCount').value,
                 client_type: document.getElementById('clientType').value,
@@ -124,7 +194,7 @@
             };
 
             if (!data.client_id) {
-                alert('Пожалуйста, введите ID абонента!');
+                alert('Пожалуйста, выберите или введите клиента!');
                 return;
             }
 
@@ -149,6 +219,9 @@
                 alert('❌ Сетевая ошибка при отправке');
             });
         }
+
+        // Запускаем загрузку маршрута при открытии Mini App
+        document.addEventListener("DOMContentLoaded", loadCourierRoute);
     </script>
 </body>
 </html>

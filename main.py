@@ -143,7 +143,6 @@ HTML_CONTENT = """
             padding-bottom: 90px;
         }
 
-        /* Верхняя шапка с табами */
         .top-nav-container {
             padding: 16px 16px 8px 16px;
             background: var(--card-bg);
@@ -178,7 +177,6 @@ HTML_CONTENT = """
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
 
-        /* Контент вкладок */
         .tab-content {
             display: none;
             padding: 16px;
@@ -188,7 +186,6 @@ HTML_CONTENT = """
             display: block;
         }
 
-        /* Карточки заказов (в стиле фото) */
         .order-card {
             background: var(--card-bg);
             border-radius: 20px;
@@ -267,7 +264,6 @@ HTML_CONTENT = """
             border-radius: 12px;
         }
 
-        /* Модальное окно отчета */
         .modal-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -373,7 +369,6 @@ HTML_CONTENT = """
             box-shadow: 0 4px 15px rgba(244, 63, 94, 0.3);
         }
 
-        /* Нижняя панель навигации */
         .bottom-nav {
             position: fixed;
             bottom: 0; left: 0; right: 0;
@@ -414,7 +409,6 @@ HTML_CONTENT = """
 </head>
 <body>
 
-    <!-- Верхние табы -->
     <div class="top-nav-container">
         <div class="tabs-header">
             <div class="tab-btn active" onclick="switchTab('orders')" id="tabOrders">📦 Заказы на сегодня</div>
@@ -422,14 +416,12 @@ HTML_CONTENT = """
         </div>
     </div>
 
-    <!-- Вкладка: Заказы -->
     <div id="contentOrders" class="tab-content active">
         <div id="ordersList">
             <div class="empty-state">Загрузка маршрута...</div>
         </div>
     </div>
 
-    <!-- Вкладка: Профиль -->
     <div id="contentProfile" class="tab-content">
         <div class="order-card">
             <div class="client-name" id="profileName">Курьер</div>
@@ -439,7 +431,6 @@ HTML_CONTENT = """
         </div>
     </div>
 
-    <!-- Модальное окно выполнения/переноса заказа -->
     <div id="orderModal" class="modal-overlay">
         <div class="modal-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -518,7 +509,6 @@ HTML_CONTENT = """
         </div>
     </div>
 
-    <!-- Нижняя панель -->
     <div class="bottom-nav">
         <div class="nav-item active" onclick="switchTab('orders')">
             <div class="nav-icon">📦</div>
@@ -560,7 +550,7 @@ HTML_CONTENT = """
                 document.getElementById('profileId').innerText = "Telegram ID: " + user.id;
             }
 
-            const userId = user ? user.id : 120958093; // дефолт для тестов
+            const userId = user ? user.id : 120958093;
             try {
                 const res = await fetch(`/api/route?user_id=${userId}`);
                 const data = await res.json();
@@ -891,6 +881,21 @@ async def handle_api_report(request):
         }
         save_report_to_db(report_record)
         remove_point_from_route(sender_id, client_id)
+
+        # Отправка уведомления в Telegram-канал
+        if CHANNEL_ID:
+            try:
+                chan_text = (
+                    f"📦 **Новый отчет о доставке!**\n\n"
+                    f"🚚 Курьер: {raw_name}\n"
+                    f"📍 Клиент: {client_id}\n"
+                    f"💧 Сдал (19л): {delivered} шт.\n"
+                    f"🔄 Пустых забрал: {returned} шт.\n"
+                    f"💳 Оплата: {payment_type} ({total_price:,} сум)".replace(",", " ")
+                )
+                await bot.send_message(CHANNEL_ID, chan_text, parse_mode="Markdown")
+            except Exception as ex:
+                logging.error(f"Не удалось отправить уведомление в канал: {ex}")
 
         return web.json_response({"status": "ok"})
     except Exception as e:

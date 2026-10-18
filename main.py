@@ -753,14 +753,14 @@ async def send_courier_personal_stats(target_message: types.Message, target_id: 
         earn_fmt = f"{total_earnings:,}".replace(",", " ")
 
         text = (
-            f"👤 **ВАШ ЛИЧНЫЙ КАБИНЕТ**\n"
+            f"👤 ВАШ ЛИЧНЫЙ КАБИНЕТ\n"
             f"📅 Дата: {today_date_str}\n\n"
             f"📦 Выполнено заказов: {orders_count}\n"
-            f"💧 Всего сдано (19л): **{total_deliv} шт.**\n"
-            f"🔄 Собрано пустых: **{total_returned} шт.**\n\n"
-            f"💵 **Итого заработок: {earn_fmt} сум**"
+            f"💧 Всего сдано (19л): {total_deliv} шт.\n"
+            f"🔄 Собрано пустых: {total_returned} шт.\n\n"
+            f"💵 Итого заработок: {earn_fmt} сум"
         )
-        await target_message.answer(text, parse_mode="Markdown")
+        await target_message.answer(text)
     except Exception as e:
         logging.error(f"Ошибка: {e}")
 
@@ -801,7 +801,7 @@ async def send_summary_report(target_message: types.Message):
             await target_message.answer(f"📭 За сегодня отчетов нет.")
             return
 
-        text = f"📊 **СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date})**:\n\n"
+        text = f"📊 СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
         tot_deliv, tot_ret, tot_rev = 0, 0, 0
 
         for cid, s in courier_stats.items():
@@ -809,20 +809,20 @@ async def send_summary_report(target_message: types.Message):
             tot_ret += s["ret"]
             tot_rev += s["rev"]
             
-            text += f"🚚 **Курьер: {s['name']}**\n"
+            text += f"🚚 Курьер: {s['name']}\n"
             text += f"   ▫️ Выполнено заказов: {s['orders']}\n"
             text += f"   ▫️ Сдано воды: {s['deliv']} шт | Пустых: {s['ret']} шт\n"
-            text += f"   ▫️ Выручка: {s['rev']:,} сум\n".replace(",", " ")
-            text += "   📍 **Точки доставки:**\n"
+            text += f"   ▫️ Выручка: {f'{s[\"rev\"]:,}'.replace(',', ' ')} сум\n"
+            text += "   📍 Точки доставки:\n"
             for c_line in s["clients"]:
                 text += f"      {c_line}\n"
             text += "\n"
 
-        text += f"💧 **Всего сдали воды:** {tot_deliv} шт\n"
-        text += f"🔄 **Всего собрали пустых:** {tot_ret} шт\n"
-        text += f"💰 **Общая выручка:** {tot_rev:,} сум".replace(",", " ")
+        text += f"💧 Всего сдали воды: {tot_deliv} шт\n"
+        text += f"🔄 Всего собрали пустых: {tot_ret} шт\n"
+        text += f"💰 Общая выручка: {f'{tot_rev:,}'.replace(',', ' ')} сум"
         
-        await target_message.answer(text, parse_mode="Markdown")
+        await target_message.answer(text)
     except Exception as e:
         await target_message.answer(f"⚠️ Ошибка: {e}")
 
@@ -906,14 +906,14 @@ async def handle_api_report(request):
         if CHANNEL_ID:
             try:
                 chan_text = (
-                    f"📦 **Новый отчет о доставке!**\n\n"
+                    f"📦 Новый отчет о доставке!\n\n"
                     f"🚚 Курьер: {raw_name}\n"
                     f"📍 Клиент: {client_id}\n"
                     f"💧 Сдал (19л): {delivered} шт.\n"
                     f"🔄 Пустых забрал: {returned} шт.\n"
                     f"💳 Оплата: {payment_type} ({total_price:,} сум)".replace(",", " ")
                 )
-                await bot.send_message(CHANNEL_ID, chan_text, parse_mode="Markdown")
+                await bot.send_message(CHANNEL_ID, chan_text)
             except Exception as ex:
                 logging.error(f"Не удалось отправить уведомление в канал: {ex}")
 

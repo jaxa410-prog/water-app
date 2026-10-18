@@ -94,6 +94,22 @@ def remove_point_from_route(courier_id, client_name):
     except Exception as e:
         logging.error(f"Ошибка удаления точки из маршрута: {e}")
 
+def save_rescheduled_order(courier_id, courier_name, client_name, target_date):
+    """Сохраняет перенесенный заказ в таблицу rescheduled_orders"""
+    if not supabase: return
+    try:
+        data = {
+            "courier_id": courier_id,
+            "courier_name": courier_name,
+            "client_name": client_name,
+            "target_date": target_date,
+            "status": "pending"
+        }
+        supabase.table("rescheduled_orders").insert(data).execute()
+        logging.info(f"Перенос заказа '{client_name}' успешно сохранен в Supabase!")
+    except Exception as e:
+        logging.error(f"Ошибка сохранения переноса заказа в Supabase: {e}")
+
 # ПРЕМИУМ HTML MINI APP С ПОДДЕРЖКОЙ ПЕРЕНОСА ЗАКАЗА
 HTML_CONTENT = """
 <!DOCTYPE html>
@@ -209,7 +225,6 @@ HTML_CONTENT = """
             outline: none;
         }
 
-        /* Блок выбора переноса */
         .reschedule-box {
             background: #fff1f2;
             border: 1.5px dashed #f43f5e;
@@ -325,7 +340,6 @@ HTML_CONTENT = """
         </div>
 
         <form id="reportForm">
-            <!-- Динамический выбор клиента -->
             <div class="form-group">
                 <label id="t_clientId">Клиент / Точка маршрута</label>
                 <select id="clientIdSelect" required onchange="checkCustomClient(this)">
@@ -333,13 +347,11 @@ HTML_CONTENT = """
                 </select>
             </div>
 
-            <!-- Ручной ввод -->
             <div class="form-group" id="customClientGroup" style="display: none;">
                 <label id="t_customClient">Введите название клиента / ID</label>
                 <input type="text" id="customClientInput" placeholder="Например: ООО Навруз или 1045">
             </div>
 
-            <!-- ЧЕКБОКС ПЕРЕНОСА ЗАКАЗА -->
             <div class="reschedule-box">
                 <label class="reschedule-toggle">
                     <input type="checkbox" id="isReschedule" onchange="toggleRescheduleMode(this.checked)">
@@ -356,7 +368,6 @@ HTML_CONTENT = """
                 </div>
             </div>
 
-            <!-- БЛОК ВВОДА БУТЫЛЕЙ (Скрывается при переносе) -->
             <div id="deliveryFieldsBlock">
                 <div class="form-group">
                     <label id="t_delivered">Сдал полных (19л)</label>
@@ -896,7 +907,10 @@ async def handle_api_report(request):
         if is_reschedule:
             reschedule_date = str(data.get("reschedule_date", "Завтра"))
             
-            # Автоматически удаляем эту точку из маршрута на сегодня
+            # А) Сохраняем в специальную таблицу переносов Supabase
+            save_rescheduled_order(sender_id, raw_name, client_id, reschedule_date)
+
+            # Б) Удаляем точку из сегодняшнего маршрута курьера
             remove_point_from_route(sender_id, client_id)
 
             report_text = (
@@ -946,7 +960,7 @@ async def handle_api_report(request):
         }
         save_report_to_db(report_record)
 
-        # Автоматически удаляем выполненную точку из списка маршрута на сегодня
+        # Удаляем выполненную точку из списка маршрута на сегодня
         remove_point_from_route(sender_id, client_id)
 
         formatted_price = f"{total_price:,}".replace(",", " ")

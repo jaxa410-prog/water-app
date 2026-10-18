@@ -684,13 +684,22 @@ HTML_CONTENT = """
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    
+    couriers = load_couriers()
+    is_courier = user_id in couriers
+    is_admin = user_id in ADMIN_IDS
+
+    if not is_courier and not is_admin:
+        await message.answer("❌ Извините, этот бот предназначен только для авторизованных курьеров и диспетчеров службы доставки воды.")
+        return
+
     web_app_url = f"{WEB_SERVER_HOST}/"
     
     keyboard_buttons = [
         [KeyboardButton(text="📝 Открыть Mini App", web_app=WebAppInfo(url=web_app_url))],
         [KeyboardButton(text="💰 Моя зарплата")]
     ]
-    if user_id in ADMIN_IDS:
+    if is_admin:
         keyboard_buttons.append([KeyboardButton(text="📊 Сводка за сегодня")])
 
     markup = ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
@@ -771,10 +780,10 @@ async def send_summary_report(target_message: types.Message):
                 matched += 1
                 cid = str(r.get("courier_id", "неизвестно"))
                 cname = str(r.get("courier_name", "Курьер"))
-                cuser = str(r.get("courier_username", "нет"))
+                client_id = str(r.get("client_id", "Не указан"))
 
                 if cid not in courier_stats:
-                    courier_stats[cid] = {"name": cname, "username": cuser, "deliv": 0, "ret": 0, "rev": 0, "earn": 0, "orders": 0}
+                    courier_stats[cid] = {"name": cname, "deliv": 0, "ret": 0, "rev": 0, "earn": 0, "orders": 0, "clients": []}
 
                 deliv = int(r.get("delivered", 0) or 0)
                 ret = int(r.get("returned", 0) or 0)
@@ -786,23 +795,34 @@ async def send_summary_report(target_message: types.Message):
                 courier_stats[cid]["rev"] += rev
                 courier_stats[cid]["earn"] += earn
                 courier_stats[cid]["orders"] += 1
+                courier_stats[cid]["clients"].append(f"• {client_id} (сдал: {deliv}, пустых: {ret})")
 
         if matched == 0:
             await target_message.answer(f"📭 За сегодня отчетов нет.")
             return
 
-        text = f"📊 СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
-        tot_deliv, tot_ret, tot_rev, tot_earn = 0, 0, 0, 0
+        text = f"📊 **СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date})**:\n\n"
+        tot_deliv, tot_ret, tot_rev = 0, 0, 0
 
         for cid, s in courier_stats.items():
             tot_deliv += s["deliv"]
             tot_ret += s["ret"]
             tot_rev += s["rev"]
-            tot_earn += s["earn"]
-            text += f"🚚 {s['name']}: заказов {s['orders']} | сдано {s['deliv']} шт | пустых {s['ret']} шт | выручка {s['rev']:,} сум\n"
+            
+            text += f"🚚 **Курьер: {s['name']}**\n"
+            text += f"   ▫️ Выполнено заказов: {s['orders']}\n"
+            text += f"   ▫️ Сдано воды: {s['deliv']} шт | Пустых: {s['ret']} шт\n"
+            text += f"   ▫️ Выручка: {s['rev']:,} сум\n".replace(",", " ")
+            text += "   📍 **Точки доставки:**\n"
+            for c_line in s["clients"]:
+                text += f"      {c_line}\n"
+            text += "\n"
 
-        text += f"\n💧 Всего сдано: {tot_deliv} | 🔄 Пустых: {tot_ret} | 💰 Выручка: {tot_rev:,} сум"
-        await target_message.answer(text)
+        text += f"💧 **Всего сдали воды:** {tot_deliv} шт\n"
+        text += f"🔄 **Всего собрали пустых:** {tot_ret} шт\n"
+        text += f"💰 **Общая выручка:** {tot_rev:,} сум".replace(",", " ")
+        
+        await target_message.answer(text, parse_mode="Markdown")
     except Exception as e:
         await target_message.answer(f"⚠️ Ошибка: {e}")
 

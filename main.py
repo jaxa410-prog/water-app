@@ -87,7 +87,7 @@ def load_reports():
         return []
     try:
         response = supabase.table("reports").select("*").execute()
-        return response.data
+        return response.data or []
     except Exception as e:
         logging.error(f"Ошибка чтения отчетов из Supabase: {e}")
         return []
@@ -442,7 +442,6 @@ HTML_CONTENT = """
             }
         }
 
-        // Загрузка маршрута для текущего курьера
         async function loadCourierRoute() {
             const tgUser = tg?.initDataUnsafe?.user;
             if (!tgUser || !tgUser.id) {
@@ -492,7 +491,6 @@ HTML_CONTENT = """
             customClientGroup.style.display = show ? 'block' : 'none';
         }
 
-        // Авто-определение Юр/Физ лица по названию
         customClientInput.addEventListener('input', () => {
             const val = customClientInput.value.trim().toLowerCase();
             if (val.length > 0 && isNaN(val)) {
@@ -585,6 +583,191 @@ HTML_CONTENT = """
 </html>
 """
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БОТА (ОБЪЯВЛЕНЫ ДО ХЕНДЛЕРОВ) ---
+
+async def send_courier_personal_stats(target_message: types.Message, target_id: int, days: int = 1):
+    try:
+        now = datetime.now(UZ_TIMEZONE)
+        today_date_str = now.strftime("%Y-%m-%d")
+        cutoff = now - timedelta(days=days)
+        reports = load_reports()
+
+        phys_deliv = 0
+        jur_deliv = 0
+        total_returned = 0
+        total_earnings = 0
+        orders_count = 0
+
+        for r in reports:
+            if str(r.get("courier_id", "")) == str(target_id):
+                r_date_str = str(r.get("date", ""))
+                try:
+                    r_date = datetime.strptime(r_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UZ_TIMEZONE)
+                except Exception:
+                    continue
+
+                if days == 1:
+                    if not r_date_str.startswith(today_date_str): continue
+                else:
+                    if r_date < cutoff: continue
+
+                deliv = int(r.get("delivered", 0) or 0)
+                ret = int(r.get("returned", 0) or 0)
+                ctype = str(r.get("client_type", "Физ. лицо"))
+                earn = int(r.get("earnings", 0) or 0)
+
+                if "Юр" in ctype:
+                    jur_deliv += deliv
+                else:
+                    phys_deliv += deliv
+
+                total_returned += ret
+                total_earnings += earn
+                orders_count += 1
+
+        period_title = f"за сегодня ({today_date_str})" if days == 1 else f"за последние {days} дней"
+
+        if orders_count == 0:
+            await target_message.answer(f"📭 У вас нет выполненных заказов {period_title}.")
+            return
+
+        total_deliv = phys_deliv + jur_deliv
+        earn_fmt = f"{total_earnings:,}".replace(",", " ")
+
+        text = (
+            f"👤 **ВАШ ЛИЧНЫЙ КАБИНЕТ (Моя зарплата)**\n"
+            f"📅 Период: {period_title}\n\n"
+            f"📦 Выполнено заказов: {orders_count}\n"
+            f"👤 Физ. лицам сдал: {phys_deliv} шт.\n"
+            f"🏢 Юр. лицам сдал: {jur_deliv} шт.\n"
+            f"💧 Всего сдано полных (19л): **{total_deliv} шт.**\n"
+            f"🔄 Всего собрано пустых: **{total_returned} шт.**\n\n"
+            f"💵 **Ваш итоговый заработок: {earn_fmt} сум**"
+        )
+        await target_message.answer(text, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Ошибка личного кабинета курьера: {e}")
+        await target_message.answer(f"⚠️ Ошибка получения статистики: {e}")
+
+async def send_summary_report(target_message: types.Message):
+    try:
+        today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
+        reports = load_reports()
+        if not reports:
+            await target_message.answer("📭 База данных отчетов пуста.")
+            return
+
+        courier_stats = {}
+        matched_reports_count = 0
+
+        for r in reports:
+            if str(r.get("date", "")).startswith(today_date):
+                matched_reports_count += 1
+                cid = str(r.get("courier_id", "неизвестно"))
+                cname = str(r.get("courier_name", "Курьер"))
+                cuser = str(r.get("courier_username", "нет_юзернейма"))
+
+                if cid not in courier_stats:
+                    courier_stats[cid] = {
+                        "name": cname, "username": cuser,
+                        "phys_delivered": 0, "jur_delivered": 0,
+                        "returned": 0, "revenue": 0, "earnings": 0, "orders": 0
+                    }
+
+                deliv = int(r.get("delivered", 0) or 0)
+                ret = int(r.get("returned", 0) or 0)
+                rev = int(r.get("total_price", 0) or 0)
+                earn = int(r.get("earnings", 0) or 0)
+                ctype = str(r.get("client_type", "Физ. лицо"))
+
+                if "Юр" in ctype:
+                    courier_stats[cid]["jur_delivered"] += deliv
+                else:
+                    courier_stats[cid]["phys_delivered"] += deliv
+
+                courier_stats[cid]["returned"] += ret
+                courier_stats[cid]["revenue"] += rev
+                courier_stats[cid]["earnings"] += earn
+                courier_stats[cid]["orders"] += 1
+
+        if matched_reports_count == 0:
+            await target_message.answer(f"📭 За сегодня (`{today_date}`) отчетов не найдено.", parse_mode="Markdown")
+            return
+
+        text = f"📊 ОБЩИЙ СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today_date}):\n\n"
+        grand_deliv, grand_ret, grand_rev, grand_earn = 0, 0, 0, 0
+
+        for cid, s in courier_stats.items():
+            total_c_deliv = s["phys_delivered"] + s["jur_delivered"]
+            grand_deliv += total_c_deliv
+            grand_ret += s["returned"]
+            grand_rev += s["revenue"]
+            grand_earn += s["earnings"]
+
+            rev_fmt = f"{s['revenue']:,}".replace(",", " ")
+            earn_fmt = f"{s['earnings']:,}".replace(",", " ")
+
+            text += (
+                f"🚚 {s['name']} (@{s['username']})\n"
+                f"📦 Заказов: {s['orders']} | Сдано: {total_c_deliv} шт.\n"
+                f"👤 Физ. лицам: {s['phys_delivered']} шт. | 🏢 Юр. лицам: {s['jur_delivered']} шт.\n"
+                f"🔄 Пустых: {s['returned']} шт. | Выручка: {rev_fmt} сум | ЗП: {earn_fmt} сум\n"
+                f"───────────────────\n"
+            )
+
+        tot_rev_fmt = f"{grand_rev:,}".replace(",", " ")
+        tot_earn_fmt = f"{grand_earn:,}".replace(",", " ")
+
+        text += (
+            f"📊 ИТОГО ПО КОМПАНИИ:\n"
+            f"💧 Сдано всего полных: {grand_deliv} шт.\n"
+            f"🔄 Собрано всего пустых: {grand_ret} шт.\n"
+            f"💰 Общая выручка: {tot_rev_fmt} сум\n"
+            f"💵 Всего курьерских: {tot_earn_fmt} сум"
+        )
+        await target_message.answer(text)
+    except Exception as e:
+        logging.error(f"Ошибка сводки: {e}")
+        await target_message.answer(f"⚠️ Ошибка: {e}")
+
+# --- ТЕЛЕГРАМ ХЕНДЛЕРЫ ---
+
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    web_app_url = f"{WEB_SERVER_HOST}/"
+    
+    keyboard_buttons = [
+        [KeyboardButton(text="📝 Открыть форму отчета", web_app=WebAppInfo(url=web_app_url))],
+        [KeyboardButton(text="💰 Моя зарплата")]
+    ]
+    if user_id in ADMIN_IDS:
+        keyboard_buttons.append([KeyboardButton(text="📊 Сводка за сегодня")])
+
+    markup = ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
+    await message.answer(
+        "👋 Добро пожаловать в систему управления доставкой воды!\n\n"
+        "Используйте кнопки ниже для отправки отчетов и проверки баланса.",
+        reply_markup=markup
+    )
+
+@dp.message(F.text == "💰 Моя зарплата")
+async def btn_my_salary(message: types.Message):
+    await send_courier_personal_stats(message, message.from_user.id, days=1)
+
+@dp.message(F.text == "📊 Сводка за сегодня")
+async def btn_daily_summary(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав администратора.")
+        return
+    await send_summary_report(message)
+
+@dp.message()
+async def fallback_handler(message: types.Message):
+    await message.answer("ℹ️ Пожалуйста, используйте кнопки меню ниже для работы с системой.")
+
+# --- WEB-СЕРВЕР AIOHTTP И МАРШРУТИЗАЦИЯ ---
+
 async def handle_index(request):
     return web.Response(text=HTML_CONTENT, content_type="text/html")
 
@@ -601,24 +784,19 @@ async def handle_webhook(request):
         logging.error(f"Ошибка вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
-# ЭНДПОИНТ ДЛЯ ПЕРЕДАЧИ ДИНАМИЧЕСКОГО МАРШРУТА В MINI APP
 async def handle_get_route(request):
     try:
         user_id = request.query.get("user_id")
         if not user_id:
-            return web.json_response({"status": "error", "message": "No user_id provided"}, status=400)
+            return web.json_response({"status": "error", "message": "No user_id"}, status=400)
 
         today_date = datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
-        
-        if not supabase:
-            return web.json_response({"status": "ok", "points": []})
+        if not supabase: return web.json_response({"status": "ok", "points": []})
 
         response = supabase.table("daily_routes").select("client_name").eq("date", today_date).eq("courier_id", int(user_id)).execute()
         points = [row["client_name"] for row in (response.data or [])]
-        
         return web.json_response({"status": "ok", "points": points})
     except Exception as e:
-        logging.error(f"Ошибка получения маршрута: {e}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 async def handle_api_report(request):
@@ -626,10 +804,8 @@ async def handle_api_report(request):
         data = await request.json()
         sender_id = data.get("user_id")
         if sender_id is not None:
-            try:
-                sender_id = int(sender_id)
-            except ValueError:
-                pass
+            try: sender_id = int(sender_id)
+            except ValueError: pass
 
         couriers = load_couriers()
         if couriers and sender_id and (sender_id not in couriers):
@@ -684,73 +860,39 @@ async def handle_api_report(request):
             try:
                 await bot.send_message(chat_id=sender_id, text=f"✅ Отчет успешно отправлен!\n\n{report_text}")
             except Exception as e:
-                logging.error(f"Не удалось отправить сообщение курьеру {sender_id}: {e}")
+                logging.error(f"Не удалось отправить сообщение курьеру: {e}")
 
         if CHANNEL_ID:
             try:
                 target_chat = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
                 await bot.send_message(chat_id=target_chat, text=report_text)
             except Exception as channel_err:
-                logging.error(f"Ошибка отправки в канал ({CHANNEL_ID}): {channel_err}")
+                logging.error(f"Ошибка отправки в канал: {channel_err}")
 
         return web.json_response({"status": "ok"})
     except Exception as e:
-        logging.error(f"Ошибка сохранения отчета: {e}", exc_info=True)
+        logging.error(f"Ошибка сохранения отчета: {e}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-# Хендлеры Telegram бота
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    web_app_url = f"{WEB_SERVER_HOST}/"
-    
-    keyboard_buttons = [
-        [KeyboardButton(text="📝 Открыть форму отчета", web_app=WebAppInfo(url=web_app_url))],
-        [KeyboardButton(text="💰 Моя зарплата")]
-    ]
-    if user_id in ADMIN_IDS:
-        keyboard_buttons.append([KeyboardButton(text="📊 Сводка за сегодня")])
-
-    markup = ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True)
-    await message.answer(
-        "👋 Добро пожаловать в систему управления доставкой воды!\n\n"
-        "Используйте кнопки ниже для отправки отчетов и проверки баланса.",
-        reply_markup=markup
-    )
-
-@dp.message(F.text == "💰 Моя зарплата")
-async def btn_my_salary(message: types.Message):
-    await send_courier_personal_stats(message, message.from_user.id, days=1)
-
-@dp.message(F.text == "📊 Сводка за сегодня")
-async def btn_daily_summary(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав администратора.")
-        return
-    await send_summary_report(message)
-
-# Точка входа для запуска aiohttp и бота
 async def main():
     if TOKEN:
         try:
             await bot.set_webhook(url=WEBHOOK_URL)
-            logging.info(f"Вебхук успешно установлен: {WEBHOOK_URL}")
+            logging.info(f"Вебхук установлен: {WEBHOOK_URL}")
         except Exception as e:
-            logging.error(f"Ошибка установки вебхука: {e}")
+            logging.error(f"Ошибка вебхука: {e}")
 
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/health", handle_health)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    app.router.add_get("/api/route", handle_get_route)       # <--- Эндпоинт для динамических маршрутов
+    app.router.add_get("/api/route", handle_get_route)
     app.router.add_post("/api/report", handle_api_report)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logging.info(f"Веб-сервер запущен на порту {PORT}")
-
     await asyncio.Event().wait()
 
 if __name__ == "__main__":

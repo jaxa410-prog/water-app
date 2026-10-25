@@ -117,6 +117,27 @@ def location_key(text):
     return clean_point_name(text).casefold()
 
 
+ID_MIN_LEN = 3   # короткие числа в середине строки («дом 5») не считаем ID
+
+
+def build_id_map(subscribers):
+    return {str(cid).strip().casefold(): str(cid).strip() for cid in subscribers}
+
+
+def find_client_id(line, id_map):
+    """ID абонента из строки маршрута. Текст вокруг ID может быть любым и меняться каждый день."""
+    if not id_map:
+        return None
+    tokens = re.findall(r"[\w\-]+", clean_point_name(line))
+    if not tokens:
+        return None
+    first = id_map.get(tokens[0].casefold())
+    if first:
+        return first
+    hits = {id_map[t.casefold()] for t in tokens[1:] if len(t) >= ID_MIN_LEN and t.casefold() in id_map}
+    return hits.pop() if len(hits) == 1 else None
+
+
 def normalize_phone(text):
     """+998901234567 или None. Телефон уходит в ссылку tel:, поэтому отдаём только проверенный вид."""
     raw = str(text or "").strip()
@@ -250,6 +271,57 @@ def load_phones():
     except Exception:
         logging.warning("Телефоны недоступны (нет таблицы client_phones?)")
         return {}
+
+
+def load_subscribers():
+    """{ID: данные абонента} из общей базы. Без таблицы subscribers работает прежний поиск по имени."""
+    if not supabase:
+        return {}
+    try:
+        result = {}
+        for r in fetch_all("subscribers", order_by="client_id"):
+            cid = str(r.get("client_id") or "").strip()
+            if not cid:
+                continue
+
+            def num(value):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            result[cid] = {
+                "name": r.get("name") or "", "address": r.get("address") or "",
+                "phone": normalize_phone(r.get("phone")) or "",
+                "latitude": num(r.get("latitude")), "longitude": num(r.get("longitude")),
+            }
+        return result
+    except Exception:
+        logging.warning("База абонентов недоступна (нет таблицы subscribers?)")
+        return {}
+
+
+def resolve_point(name, subs, id_map, locations, phones):
+    """(ID, широта, долгота, адрес, телефон): сначала по ID из базы абонентов, затем по старым таблицам по имени."""
+    cid = find_client_id(name, id_map)
+    sub = subs.get(cid) if cid else None
+    key = location_key(name)
+    lat = lon = None
+    address, phone = "", ""
+    if sub:
+        lat, lon, address, phone = sub["latitude"], sub["longitude"], sub["address"], sub["phone"]
+    if lat is None:
+        loc = locations.get(key)
+        if loc:
+            lat, lon = loc[0], loc[1]
+            address = address or loc[2]
+    phone = normalize_phone(phone) or phones.get(key) or ""
+    return cid, lat, lon, address, phone
+
+
+def client_label(cid, subs):
+    sub = subs.get(cid)
+    return f"{cid} — {sub['name']}" if sub and sub["name"] else cid
 
 
 def save_report_to_db(report_data):
@@ -841,6 +913,7 @@ async def send_summary_report(target_message: types.Message):
             await target_message.answer("📭 За сегодня отчетов нет.")
             return
 
+        subs = await asyncio.to_thread(load_subscribers)
         courier_stats = {}
         for r in reports:
             cid = str(r.get("courier_id") or "неизвестно")
@@ -853,7 +926,9 @@ async def send_summary_report(target_message: types.Message):
             stats["ret"] += ret
             stats["rev"] += int(r.get("total_price", 0) or 0)
             stats["orders"] += 1
-            stats["clients"].append(f"• {r.get('client_id') or 'Не указан'} (сдал: {deliv}, пустых: {ret})")
+            stats["clients"].append(
+                f"• {client_label(str(r.get('client_id') or 'Не указан'), subs)} (сдал: {deliv}, пустых: {ret})"
+            )
 
         text = f"📊 СВОДНЫЙ ОТЧЕТ ЗА СЕГОДНЯ ({today}):\n\n"
         tot_deliv, tot_ret, tot_rev = 0, 0, 0
@@ -920,19 +995,20 @@ async def handle_get_route(request):
         if courier_id not in couriers and courier_id not in ADMIN_IDS:
             return api_error(403, "Вы не зарегистрированы как курьер")
 
-        rows, locations, phones = await asyncio.gather(
+        rows, locations, phones, subs = await asyncio.gather(
             asyncio.to_thread(load_route, courier_id, today_str()),
             asyncio.to_thread(load_locations),
             asyncio.to_thread(load_phones),
+            asyncio.to_thread(load_subscribers),
         )
+        id_map = build_id_map(subs)
         points = []
         for row in rows:
             name = str(row.get("client_name") or "")
             point = {"id": row["id"], "name": name}
-            loc = locations.get(location_key(name))
-            if loc:
-                point.update({"lat": loc[0], "lon": loc[1], "address": loc[2]})
-            phone = phones.get(location_key(name))
+            cid, lat, lon, address, phone = resolve_point(name, subs, id_map, locations, phones)
+            if lat is not None:
+                point.update({"lat": lat, "lon": lon, "address": address})
             if phone:
                 point["phone"] = phone
             points.append(point)
@@ -979,13 +1055,18 @@ async def handle_api_report(request):
         point = await asyncio.to_thread(get_route_point, point_id, sender_id)
         if not point:
             return api_error(409, "Эта точка уже выполнена или удалена из маршрута")
-        client_id = str(point.get("client_name") or "Не указан")
+        point_text = str(point.get("client_name") or "Не указан")
+        # В отчёт идёт стабильный ID абонента: текст в маршруте может меняться, а долги считаются по ID
+        subs = await asyncio.to_thread(load_subscribers)
+        known_id = find_client_id(point_text, build_id_map(subs))
+        client_id = known_id or point_text
+        client_shown = client_label(known_id, subs) if known_id else point_text
 
         if bool(data.get("is_reschedule", False)):
             reschedule_date = str(data.get("reschedule_date") or "")
             if reschedule_date not in RESCHEDULE_CHOICES:
                 return api_error(400, "Некорректная дата переноса")
-            if not await asyncio.to_thread(save_rescheduled_order, sender_id, courier_name, client_id, reschedule_date):
+            if not await asyncio.to_thread(save_rescheduled_order, sender_id, courier_name, point_text, reschedule_date):
                 return api_error(500, "Не удалось сохранить перенос. Попробуйте ещё раз")
             await asyncio.to_thread(delete_route_point, point_id)
             return web.json_response({"status": "ok"})
@@ -1035,7 +1116,7 @@ async def handle_api_report(request):
                     CHANNEL_ID,
                     f"📦 Новый отчет о доставке!\n\n"
                     f"🚚 Курьер: {courier_name}\n"
-                    f"📍 Клиент: {client_id}\n"
+                    f"📍 Клиент: {client_shown}\n"
                     f"💧 Сдал (19л): {delivered} шт.\n"
                     f"🔄 Пустых забрал: {returned} шт.\n"
                     f"💳 Оплата: {payment_type} ({price_fmt} сум)",

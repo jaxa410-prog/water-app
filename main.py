@@ -117,6 +117,25 @@ def location_key(text):
     return clean_point_name(text).casefold()
 
 
+def normalize_phone(text):
+    """+998901234567 или None. Телефон уходит в ссылку tel:, поэтому отдаём только проверенный вид."""
+    raw = str(text or "").strip()
+    if re.search(r"[^\d\s+\-()./]", raw):                # буквы и прочий мусор: не номер
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if digits.startswith("998") and len(digits) != 12:   # узбекский номер ровно из 12 цифр
+        return None
+    if len(digits) == 9:
+        digits = "998" + digits
+    elif len(digits) == 10 and digits.startswith("8"):
+        digits = "998" + digits[1:]
+    if len(digits) == 12 and digits.startswith("998"):
+        return "+" + digits
+    if raw.startswith("+") and 10 <= len(digits) <= 15:
+        return "+" + digits
+    return None
+
+
 def today_str():
     return datetime.now(UZ_TIMEZONE).strftime("%Y-%m-%d")
 
@@ -217,6 +236,22 @@ def load_locations():
         return {}
 
 
+def load_phones():
+    """{ключ_клиента: телефон}. Без таблицы client_phones кнопки «Позвонить» просто не показываются."""
+    if not supabase:
+        return {}
+    try:
+        result = {}
+        for r in fetch_all("client_phones", order_by="client_key"):
+            phone = normalize_phone(r.get("phone"))
+            if r.get("client_key") and phone:
+                result[r["client_key"]] = phone
+        return result
+    except Exception:
+        logging.warning("Телефоны недоступны (нет таблицы client_phones?)")
+        return {}
+
+
 def save_report_to_db(report_data):
     """True только если запись реально сохранилась."""
     if not supabase:
@@ -306,6 +341,13 @@ HTML_CONTENT = r"""
         .nav-item.active { color: var(--accent-blue); }
         .nav-icon { font-size: 20px; margin-bottom: 2px; }
         .empty-state { text-align: center; padding: 50px 20px; color: var(--text-secondary); font-weight: 600; }
+        a { text-decoration: none; }
+        .call-btn { display: block; text-align: center; padding: 12px 0; border-radius: 12px; background: #dcfce7; color: #166534; font-size: 14px; font-weight: 800; }
+        .call-btn-lg { display: block; text-align: center; padding: 14px 0; border-radius: 14px; background: #0284c7; color: #ffffff; font-size: 15px; font-weight: 800; margin-bottom: 14px; }
+        .pay-chips { display: grid; grid-template-columns: 1fr; gap: 8px; border-radius: 16px; }
+        .pay-chip { padding: 13px; border-radius: 14px; border: 1.5px solid var(--border-color); background: var(--card-bg); text-align: center; font-weight: 700; font-size: 14px; cursor: pointer; }
+        .pay-chip.selected { background: #d1fae5; border-color: #10b981; color: #065f46; }
+        .pay-chips.error .pay-chip { border-color: var(--danger); background: #fef2f2; }
     </style>
 </head>
 <body>
@@ -338,6 +380,8 @@ HTML_CONTENT = r"""
                 <div class="modal-title" id="modalClientTitle">Обработка заказа</div>
                 <div onclick="closeModal()" style="font-size: 22px; font-weight: bold; cursor: pointer; color: var(--text-secondary);">✕</div>
             </div>
+
+            <a id="modalCall" class="call-btn-lg" style="display: none;"></a>
 
             <form id="reportForm" onsubmit="submitReport(event)">
                 <div class="reschedule-box">
@@ -381,21 +425,20 @@ HTML_CONTENT = r"""
                         </div>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                        <div class="form-group">
-                            <label>Тип клиента</label>
-                            <select id="clientType">
-                                <option value="Физ. лицо">Физ. лицо</option>
-                                <option value="Юр. лицо">Юр. лицо</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Оплата</label>
-                            <select id="paymentType">
-                                <option value="Наличные">Наличные</option>
-                                <option value="Click/Payme">Click/Payme</option>
-                                <option value="Перечисление">Перечисление</option>
-                            </select>
+                    <div class="form-group">
+                        <label>Тип клиента</label>
+                        <select id="clientType">
+                            <option value="Физ. лицо">Физ. лицо</option>
+                            <option value="Юр. лицо">Юр. лицо</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Способ оплаты (обязательно)</label>
+                        <div class="pay-chips" id="paymentChips">
+                            <div class="pay-chip" data-pay="Наличные" onclick="selectPayment(this)">💵 Наличные</div>
+                            <div class="pay-chip" data-pay="Click/Payme" onclick="selectPayment(this)">💳 Click / Payme</div>
+                            <div class="pay-chip" data-pay="Перечисление" onclick="selectPayment(this)">🏛 Перечисление</div>
                         </div>
                     </div>
 
@@ -432,6 +475,11 @@ HTML_CONTENT = r"""
         let routePoints = [];
         let selected = null;
         let sending = false;
+        let selectedPayment = null;
+
+        function isValidPhone(p) {
+            return /^\+\d{9,15}$/.test(p || "");
+        }
 
         function el(tag, className, text) {
             const node = document.createElement(tag);
@@ -526,6 +574,14 @@ HTML_CONTENT = r"""
                 card.appendChild(el('div', 'client-name', point.name));
                 card.appendChild(el('div', 'client-address', point.address || ''));
 
+                if (isValidPhone(point.phone)) {
+                    const call = el('a', 'call-btn', '📞 Позвонить: ' + point.phone);
+                    call.href = 'tel:' + point.phone;
+                    call.style.marginBottom = '10px';
+                    call.onclick = (event) => event.stopPropagation();
+                    card.appendChild(call);
+                }
+
                 if (point.lat != null && point.lon != null) {
                     const row = el('div', 'map-row');
                     row.appendChild(mapButton('🗺 Google Maps', `https://www.google.com/maps/dir/?api=1&destination=${point.lat},${point.lon}`));
@@ -550,7 +606,30 @@ HTML_CONTENT = r"""
             document.getElementById('returned').value = '';
             document.getElementById('isReschedule').checked = false;
             toggleReschedule(false);
+            resetPayment();
+
+            const modalCall = document.getElementById('modalCall');
+            if (isValidPhone(point.phone)) {
+                modalCall.href = 'tel:' + point.phone;
+                modalCall.textContent = '📞 Позвонить клиенту: ' + point.phone;
+                modalCall.style.display = 'block';
+            } else {
+                modalCall.style.display = 'none';
+            }
             updateCalc();
+        }
+
+        function resetPayment() {
+            selectedPayment = null;
+            document.querySelectorAll('.pay-chip').forEach(chip => chip.classList.remove('selected'));
+            document.getElementById('paymentChips').classList.remove('error');
+        }
+
+        function selectPayment(node) {
+            selectedPayment = node.dataset.pay;
+            document.querySelectorAll('.pay-chip').forEach(chip => chip.classList.remove('selected'));
+            node.classList.add('selected');
+            document.getElementById('paymentChips').classList.remove('error');
         }
 
         function closeModal() {
@@ -602,25 +681,38 @@ HTML_CONTENT = r"""
             const delivered = readCount('delivered');
             const returned = readCount('returned');
 
+            const rescheduleDate = document.getElementById('rescheduleDate').value;
+            let paymentType = "-";
+
             if (!isResch) {
                 if (delivered === null || returned === null) {
                     notify("Введите целые числа от 0 до 1000");
                     return;
                 }
-                if (delivered === 0 && returned === 0 &&
-                    !(await askConfirm("Сдано 0 и принято 0. Закрыть точку без доставки?"))) {
-                    return;
+                if (delivered > 0) {
+                    if (!selectedPayment) {
+                        document.getElementById('paymentChips').classList.add('error');
+                        notify("Выберите способ оплаты: наличные, Click/Payme или перечисление");
+                        return;
+                    }
+                    paymentType = selectedPayment;
                 }
+                const total = (delivered * pricePerBottle).toLocaleString('ru-RU');
+                let message = `Сдал: ${delivered}, пустых: ${returned}\nОплата: ${delivered > 0 ? paymentType : '—'}\nСумма: ${total} сум\n\nОтправить отчёт?`;
+                if (delivered === 0 && returned === 0) message = "⚠️ Сдано 0 и принято 0.\n\n" + message;
+                if (!(await askConfirm(message))) return;
+            } else {
+                if (!(await askConfirm("Перенести заказ: " + rescheduleDate + "?"))) return;
             }
 
             const payload = {
                 route_point_id: selected.id,
                 is_reschedule: isResch,
-                reschedule_date: isResch ? document.getElementById('rescheduleDate').value : null,
+                reschedule_date: isResch ? rescheduleDate : null,
                 delivered: isResch ? 0 : delivered,
                 returned: isResch ? 0 : returned,
                 client_type: document.getElementById('clientType').value,
-                payment_type: document.getElementById('paymentType').value
+                payment_type: paymentType
             };
 
             const btn = document.getElementById('submitBtn');
@@ -828,9 +920,10 @@ async def handle_get_route(request):
         if courier_id not in couriers and courier_id not in ADMIN_IDS:
             return api_error(403, "Вы не зарегистрированы как курьер")
 
-        rows, locations = await asyncio.gather(
+        rows, locations, phones = await asyncio.gather(
             asyncio.to_thread(load_route, courier_id, today_str()),
             asyncio.to_thread(load_locations),
+            asyncio.to_thread(load_phones),
         )
         points = []
         for row in rows:
@@ -839,6 +932,9 @@ async def handle_get_route(request):
             loc = locations.get(location_key(name))
             if loc:
                 point.update({"lat": loc[0], "lon": loc[1], "address": loc[2]})
+            phone = phones.get(location_key(name))
+            if phone:
+                point["phone"] = phone
             points.append(point)
         return web.json_response({"status": "ok", "points": points, "price": PRICE_PER_BOTTLE})
     except Exception:
@@ -902,8 +998,14 @@ async def handle_api_report(request):
 
         client_type = str(data.get("client_type") or "")
         payment_type = str(data.get("payment_type") or "")
-        if client_type not in CLIENT_TYPES or payment_type not in PAYMENT_TYPES:
-            return api_error(400, "Некорректный тип клиента или оплаты")
+        if client_type not in CLIENT_TYPES:
+            return api_error(400, "Некорректный тип клиента")
+        if delivered > 0:
+            # Способ оплаты выбирает курьер сам, значения по умолчанию нет
+            if payment_type not in PAYMENT_TYPES:
+                return api_error(400, "Выберите способ оплаты")
+        else:
+            payment_type = "-"   # воду не сдавали, оплаты нет
 
         total_price = delivered * PRICE_PER_BOTTLE   # сумму считает сервер, а не телефон
         rate = BONUS_JURIDICAL if "Юр" in client_type else BONUS_PHYSICAL

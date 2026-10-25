@@ -120,22 +120,76 @@ def location_key(text):
 ID_MIN_LEN = 3   # короткие числа в середине строки («дом 5») не считаем ID
 
 
+COMPACT_MIN_LEN = 6   # ID короче этого не ищем «слитно» (без пробелов), иначе будут ложные совпадения
+
+
+def _norm_words(text):
+    """Слова в нижнем регистре через один пробел: «HOY  LIDER-1» -> «hoy lider 1»."""
+    return " ".join(re.findall(r"\w+", str(text or "").casefold()))
+
+
+def same_text(a, b):
+    """Одинаковы ли строки без учёта регистра, пробелов и знаков."""
+    return _norm_words(a).replace(" ", "") == _norm_words(b).replace(" ", "")
+
+
+def route_text_for(cid, name):
+    """Строка для маршрута: «ID Имя», а если имя повторяет ID, то только ID."""
+    return cid if not name or same_text(cid, name) else f"{cid} {name}"
+
+
 def build_id_map(subscribers):
-    return {str(cid).strip().casefold(): str(cid).strip() for cid in subscribers}
+    """Индекс ID для быстрого поиска в строках маршрута. ID может быть числом или названием с пробелами."""
+    norm, compact, by_first = {}, {}, {}
+    for cid in subscribers:
+        cid = str(cid).strip()
+        n = _norm_words(cid)
+        if not n:
+            continue
+        if n not in norm:
+            norm[n] = cid
+            by_first.setdefault(n.split(" ", 1)[0], []).append(n)
+        c = n.replace(" ", "")
+        if len(c) >= COMPACT_MIN_LEN:
+            compact.setdefault(c, cid)
+    return {"norm": norm, "compact": compact, "by_first": by_first}
 
 
 def find_client_id(line, id_map):
-    """ID абонента из строки маршрута. Текст вокруг ID может быть любым и меняться каждый день."""
-    if not id_map:
+    """ID абонента из строки маршрута. Текст вокруг ID может быть любым и меняться каждый день.
+
+    Побеждает совпадение в начале строки, затем самое длинное. ID, записанный слитно
+    («HOYLIDER...» вместо «HOY LIDER...») и наоборот, тоже находится.
+    """
+    if not id_map or not id_map.get("norm"):
         return None
-    tokens = re.findall(r"[\w\-]+", clean_point_name(line))
-    if not tokens:
+    text = _norm_words(clean_point_name(line))
+    if not text:
         return None
-    first = id_map.get(tokens[0].casefold())
-    if first:
-        return first
-    hits = {id_map[t.casefold()] for t in tokens[1:] if len(t) >= ID_MIN_LEN and t.casefold() in id_map}
-    return hits.pop() if len(hits) == 1 else None
+    padded = f" {text} "
+    candidates = set()
+    for token in set(text.split(" ")):
+        candidates.update(id_map["by_first"].get(token, ()))
+
+    best = None   # (не_в_начале, -длина, позиция, ID)
+    for n in candidates:
+        pos = padded.find(f" {n} ")
+        if pos < 0:
+            continue
+        if " " not in n and len(n) < ID_MIN_LEN and pos != 0:
+            continue   # короткое число в середине строки (дом, квартира) не считаем ID
+        rank = (0 if pos == 0 else 1, -len(n), pos, id_map["norm"][n])
+        if best is None or rank < best:
+            best = rank
+    if best:
+        return best[3]
+
+    squeezed = text.replace(" ", "")
+    best_len, best_id = 0, None
+    for c, cid in id_map["compact"].items():
+        if len(c) > best_len and squeezed.startswith(c):
+            best_len, best_id = len(c), cid
+    return best_id
 
 
 def normalize_phone(text):
@@ -155,6 +209,16 @@ def normalize_phone(text):
     if raw.startswith("+") and 10 <= len(digits) <= 15:
         return "+" + digits
     return None
+
+
+def normalize_phones(text):
+    """Все номера из строки «+998..., +998...» (или с переносами) списком, без повторов."""
+    result = []
+    for part in re.split(r"[;,/\n]+", str(text or "")):
+        phone = normalize_phone(part)
+        if phone and phone not in result:
+            result.append(phone)
+    return result
 
 
 def today_str():
@@ -292,7 +356,7 @@ def load_subscribers():
 
             result[cid] = {
                 "name": r.get("name") or "", "address": r.get("address") or "",
-                "phone": normalize_phone(r.get("phone")) or "",
+                "phone": ", ".join(normalize_phones(r.get("phone"))),
                 "latitude": num(r.get("latitude")), "longitude": num(r.get("longitude")),
             }
         return result
@@ -315,13 +379,15 @@ def resolve_point(name, subs, id_map, locations, phones):
         if loc:
             lat, lon = loc[0], loc[1]
             address = address or loc[2]
-    phone = normalize_phone(phone) or phones.get(key) or ""
-    return cid, lat, lon, address, phone
+    phone_list = normalize_phones(phone) or ([phones[key]] if phones.get(key) else [])
+    return cid, lat, lon, address, phone_list
 
 
 def client_label(cid, subs):
     sub = subs.get(cid)
-    return f"{cid} — {sub['name']}" if sub and sub["name"] else cid
+    if sub and sub["name"] and not same_text(cid, sub["name"]):
+        return f"{cid} — {sub['name']}"
+    return cid
 
 
 def save_report_to_db(report_data):
@@ -414,8 +480,13 @@ HTML_CONTENT = r"""
         .nav-icon { font-size: 20px; margin-bottom: 2px; }
         .empty-state { text-align: center; padding: 50px 20px; color: var(--text-secondary); font-weight: 600; }
         a { text-decoration: none; }
-        .call-btn { display: block; text-align: center; padding: 12px 0; border-radius: 12px; background: #dcfce7; color: #166534; font-size: 14px; font-weight: 800; }
-        .call-btn-lg { display: block; text-align: center; padding: 14px 0; border-radius: 14px; background: #0284c7; color: #ffffff; font-size: 15px; font-weight: 800; margin-bottom: 14px; }
+        .call-block { margin-bottom: 12px; }
+        .call-row { display: flex; gap: 8px; margin-bottom: 8px; }
+        .call-btn { flex: 1; text-align: center; padding: 13px 0; border-radius: 12px; background: #dcfce7; color: #166534; font-size: 15px; font-weight: 800; cursor: pointer; user-select: none; }
+        .call-btn:active { transform: scale(0.98); }
+        .call-block.large .call-btn { background: #0284c7; color: #ffffff; padding: 15px 0; font-size: 16px; }
+        .chat-btn { text-align: center; padding: 8px 0; font-size: 12px; font-weight: 700; color: #0369a1; cursor: pointer; }
+        .note-line { color: #b45309; font-weight: 700; }
         .pay-chips { display: grid; grid-template-columns: 1fr; gap: 8px; border-radius: 16px; }
         .pay-chip { padding: 13px; border-radius: 14px; border: 1.5px solid var(--border-color); background: var(--card-bg); text-align: center; font-weight: 700; font-size: 14px; cursor: pointer; }
         .pay-chip.selected { background: #d1fae5; border-color: #10b981; color: #065f46; }
@@ -453,7 +524,8 @@ HTML_CONTENT = r"""
                 <div onclick="closeModal()" style="font-size: 22px; font-weight: bold; cursor: pointer; color: var(--text-secondary);">✕</div>
             </div>
 
-            <a id="modalCall" class="call-btn-lg" style="display: none;"></a>
+            <div id="modalAddress"></div>
+            <div id="modalCall"></div>
 
             <form id="reportForm" onsubmit="submitReport(event)">
                 <div class="reschedule-box">
@@ -553,6 +625,65 @@ HTML_CONTENT = r"""
             return /^\+\d{9,15}$/.test(p || "");
         }
 
+        function phonesOf(point) {
+            const list = Array.isArray(point.phones) && point.phones.length ? point.phones : (point.phone ? [point.phone] : []);
+            return list.filter(isValidPhone).slice(0, 3);
+        }
+
+        function formatPhone(p) {
+            const m = /^\+998(\d{2})(\d{3})(\d{2})(\d{2})$/.exec(p);
+            return m ? `+998 ${m[1]} ${m[2]} ${m[3]} ${m[4]}` : p;
+        }
+
+        // Системный звонок. На части телефонов Telegram его не пропускает, поэтому рядом есть кнопка «Номер в чат».
+        function dial(phone) {
+            window.location.href = 'tel:' + phone;
+        }
+
+        async function sendPhoneToChat(point) {
+            try {
+                const res = await fetch('/api/phone-to-chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'tma ' + initData },
+                    body: JSON.stringify({ route_point_id: point.id })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.status === "ok") {
+                    notify("Номер отправлен в чат с ботом. Закройте приложение, нажмите на номер и выберите «Позвонить».");
+                } else {
+                    notify(data.message || "Не удалось отправить номер");
+                }
+            } catch (e) {
+                notify("Ошибка соединения с сервером");
+            }
+        }
+
+        function buildCallBlock(point, large) {
+            const phones = phonesOf(point);
+            if (phones.length === 0) return null;
+            const block = el('div', large ? 'call-block large' : 'call-block');
+            phones.forEach(phone => {
+                const row = el('div', 'call-row');
+                const btn = el('div', 'call-btn', '📞 ' + formatPhone(phone));
+                btn.onclick = (event) => { event.stopPropagation(); dial(phone); };
+                row.appendChild(btn);
+                block.appendChild(row);
+            });
+            const chat = el('div', 'chat-btn', '📩 Не открылся звонок? Номер в чат');
+            chat.onclick = (event) => { event.stopPropagation(); sendPhoneToChat(point); };
+            block.appendChild(chat);
+            return block;
+        }
+
+        // Адрес, ориентир и примечание хранятся одной строкой через « | »: показываем каждое с новой строки
+        function buildAddress(text) {
+            const box = el('div', 'client-address');
+            (text || "").split(" | ").forEach(line => {
+                if (line.trim()) box.appendChild(el('div', line.startsWith('Примечание:') ? 'note-line' : '', line));
+            });
+            return box;
+        }
+
         function el(tag, className, text) {
             const node = document.createElement(tag);
             if (className) node.className = className;
@@ -644,15 +775,10 @@ HTML_CONTENT = r"""
                 card.appendChild(header);
 
                 card.appendChild(el('div', 'client-name', point.name));
-                card.appendChild(el('div', 'client-address', point.address || ''));
+                card.appendChild(buildAddress(point.address));
 
-                if (isValidPhone(point.phone)) {
-                    const call = el('a', 'call-btn', '📞 Позвонить: ' + point.phone);
-                    call.href = 'tel:' + point.phone;
-                    call.style.marginBottom = '10px';
-                    call.onclick = (event) => event.stopPropagation();
-                    card.appendChild(call);
-                }
+                const callBlock = buildCallBlock(point, false);
+                if (callBlock) card.appendChild(callBlock);
 
                 if (point.lat != null && point.lon != null) {
                     const row = el('div', 'map-row');
@@ -680,14 +806,13 @@ HTML_CONTENT = r"""
             toggleReschedule(false);
             resetPayment();
 
+            const modalAddress = document.getElementById('modalAddress');
+            modalAddress.innerHTML = "";
+            modalAddress.appendChild(buildAddress(point.address));
             const modalCall = document.getElementById('modalCall');
-            if (isValidPhone(point.phone)) {
-                modalCall.href = 'tel:' + point.phone;
-                modalCall.textContent = '📞 Позвонить клиенту: ' + point.phone;
-                modalCall.style.display = 'block';
-            } else {
-                modalCall.style.display = 'none';
-            }
+            modalCall.innerHTML = "";
+            const modalBlock = buildCallBlock(point, true);
+            if (modalBlock) modalCall.appendChild(modalBlock);
             updateCalc();
         }
 
@@ -1006,11 +1131,14 @@ async def handle_get_route(request):
         for row in rows:
             name = str(row.get("client_name") or "")
             point = {"id": row["id"], "name": name}
-            cid, lat, lon, address, phone = resolve_point(name, subs, id_map, locations, phones)
+            cid, lat, lon, address, phone_list = resolve_point(name, subs, id_map, locations, phones)
             if lat is not None:
-                point.update({"lat": lat, "lon": lon, "address": address})
-            if phone:
-                point["phone"] = phone
+                point.update({"lat": lat, "lon": lon})
+            if address:
+                point["address"] = address
+            if phone_list:
+                point["phones"] = phone_list
+                point["phone"] = phone_list[0]
             points.append(point)
         return web.json_response({"status": "ok", "points": points, "price": PRICE_PER_BOTTLE})
     except Exception:
@@ -1130,6 +1258,58 @@ async def handle_api_report(request):
         return api_error(500, "Ошибка сервера")
 
 
+CALL_COOLDOWN = {}   # (курьер, точка) -> время последней отправки номера в чат
+
+
+async def handle_phone_to_chat(request):
+    """Звонок из Mini App открывается не на всех телефонах. Запасной путь: бот пишет номер курьеру в чат,
+    Telegram делает номер нажимаемым, нажатие даёт «Позвонить»."""
+    user = get_auth_user(request)
+    if not user:
+        return api_error(401, "Не удалось подтвердить пользователя Telegram")
+    sender_id = int(user["id"])
+    if not supabase:
+        return api_error(503, "База данных недоступна")
+    try:
+        data = await request.json()
+        point_id = int(data.get("route_point_id"))
+    except (TypeError, ValueError):
+        return api_error(400, "Не указана точка маршрута")
+    except Exception:
+        return api_error(400, "Некорректный запрос")
+
+    try:
+        couriers = await asyncio.to_thread(load_couriers)
+        if sender_id not in couriers:
+            return api_error(403, "Вы не зарегистрированы как курьер")
+        point = await asyncio.to_thread(get_route_point, point_id, sender_id)
+        if not point:
+            return api_error(409, "Эта точка уже выполнена или удалена из маршрута")
+
+        name = str(point.get("client_name") or "")
+        locations, phones, subs = await asyncio.gather(
+            asyncio.to_thread(load_locations), asyncio.to_thread(load_phones), asyncio.to_thread(load_subscribers)
+        )
+        phone_list = resolve_point(name, subs, build_id_map(subs), locations, phones)[4]
+        if not phone_list:
+            return api_error(404, "У клиента не указан телефон")
+
+        now = time.time()
+        if now - CALL_COOLDOWN.get((sender_id, point_id), 0) < 15:
+            return api_error(429, "Номер уже отправлен, посмотрите чат с ботом")
+        CALL_COOLDOWN[(sender_id, point_id)] = now
+        if len(CALL_COOLDOWN) > 1000:
+            for key in [k for k, t in CALL_COOLDOWN.items() if now - t > 300]:
+                del CALL_COOLDOWN[key]
+
+        text = f"📞 {clean_point_name(name)}\n" + "\n".join(phone_list) + "\n\nНажмите на номер и выберите «Позвонить»."
+        await bot.send_message(sender_id, text)
+        return web.json_response({"status": "ok"})
+    except Exception:
+        logging.exception("Ошибка отправки номера в чат")
+        return api_error(500, "Не удалось отправить номер. Попробуйте ещё раз")
+
+
 async def main():
     try:
         await bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
@@ -1143,6 +1323,7 @@ async def main():
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
     app.router.add_get("/api/route", handle_get_route)
     app.router.add_post("/api/report", handle_api_report)
+    app.router.add_post("/api/phone-to-chat", handle_phone_to_chat)
 
     runner = web.AppRunner(app)
     await runner.setup()
